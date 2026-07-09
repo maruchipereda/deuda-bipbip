@@ -409,7 +409,6 @@ function renderCaseDetail(item) {
   ];
   return `
     <section class="detail-grid">
-      <div><span>Nombre</span><strong>${escapeHtml(item.name || "-")}</strong></div>
       <div><span>Cedula</span><strong>${escapeHtml(item.cedula)}</strong></div>
       <div><span>Telefono</span><strong>${escapeHtml(item.phone)}</strong></div>
       <div><span>Placa</span><strong>${escapeHtml(item.plate || "-")}</strong></div>
