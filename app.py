@@ -1466,12 +1466,22 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
         if row_cedula == target_cedula and (not target_ref or row_ref == target_ref):
             target_row = row_number
             break
+    if not target_row and target_cedula:
+        cedula_matches = []
+        for row_number, row in enumerate(rows[1:], start=2):
+            row_cedula = clean_text(row[cedula_idx] if cedula_idx is not None and cedula_idx < len(row) else "")
+            if row_cedula == target_cedula:
+                cedula_matches.append(row_number)
+        if len(cedula_matches) == 1:
+            target_row = cedula_matches[0]
     if not target_row:
         return {"ok": True, "updated": False}
     updates = []
     status_label = CASE_STATUSES.get(status, status)
     if amount_idx is not None:
         updates.append((amount_idx, payment.get("amount_ves") or ""))
+    if ref_idx is not None:
+        updates.append((ref_idx, payment.get("validated_reference") or payment.get("reference") or ""))
     if status_idx is not None:
         updates.append((status_idx, status_label))
     if conciliado_idx is not None:
@@ -2110,6 +2120,7 @@ class Handler(BaseHTTPRequestHandler):
                 status = clean_text(body.get("status"))
                 notes = clean_text(body.get("notes"))
                 validated_reference = clean_text(body.get("validated_reference"))
+                validated_amount_raw = clean_text(body.get("validated_amount_ves"))
                 reconciliation_agent = clean_text(body.get("reconciliation_agent")) or user["name"]
                 if status not in CASE_STATUSES:
                     return send_json(self, {"error": "Estado invalido"}, 400)
@@ -2128,16 +2139,51 @@ class Handler(BaseHTTPRequestHandler):
                         payment = con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone()
                         timestamp = now_iso()
                         if payment:
+                            validated_amount = parse_money(validated_amount_raw) if validated_amount_raw else money(payment["amount_ves"])
+                            if validated_amount <= 0:
+                                return send_json(self, {"error": "Monto validado debe ser mayor a cero. Usa formato 1234.56 o 1.234,56."}, 400)
+                            rate_at_payment = money(payment["rate_at_payment"]) or money(driver["rate"])
+                            amount_usd_at_payment = validated_amount / rate_at_payment if rate_at_payment else 0.0
+                            attachment_path = payment["attachment_path"]
+                            attachment_name = payment["attachment_name"]
+                            attachment_type = payment["attachment_type"]
+                            attachment_file_id = payment["attachment_file_id"]
+                            attachment_file = body.get("attachment_file")
+                            if attachment_file and attachment_file.get("data"):
+                                attachment_path, attachment_name, attachment_type, attachment_file_id, attachment_base64 = save_upload(attachment_file)
+                                backup_attachment_to_sheets(attachment_file_id, attachment_name, attachment_type, attachment_base64)
                             con.execute(
                                 """
-                                update payments set status = ?, internal_notes = ?, validated_reference = coalesce(nullif(?, ''), reference),
-                                    reconciliation_agent = ?, validated_by = ?, validated_at = ?, updated_at = ?
+                                update payments set status = ?, amount_ves = ?, rate_at_payment = ?, amount_usd_at_payment = ?,
+                                    internal_notes = ?, validated_reference = coalesce(nullif(?, ''), reference),
+                                    reconciliation_agent = ?, attachment_path = ?, attachment_name = ?, attachment_type = ?, attachment_file_id = ?,
+                                    validated_by = ?, validated_at = ?, updated_at = ?
                                 where id = ?
                                 """,
-                                (status, notes, validated_reference, reconciliation_agent, user["id"], timestamp, timestamp, payment["id"]),
+                                (
+                                    status,
+                                    validated_amount,
+                                    rate_at_payment,
+                                    amount_usd_at_payment,
+                                    notes,
+                                    validated_reference,
+                                    reconciliation_agent,
+                                    attachment_path,
+                                    attachment_name,
+                                    attachment_type,
+                                    attachment_file_id,
+                                    user["id"],
+                                    timestamp,
+                                    timestamp,
+                                    payment["id"],
+                                ),
                             )
                         con.execute("update drivers set status = ?, updated_at = ? where id = ?", (status, timestamp, driver_id))
-                        add_event(con, driver_id, user["id"], "cambio_estado", f"Estado cambiado a {CASE_STATUSES[status]}. {notes}", {"status": status})
+                        event_payload = {"status": status}
+                        if payment:
+                            event_payload["monto_validado_ves"] = validated_amount
+                            event_payload["monto_validado_usd"] = amount_usd_at_payment
+                        add_event(con, driver_id, user["id"], "cambio_estado", f"Estado cambiado a {CASE_STATUSES[status]}. {notes}", event_payload)
                         updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver_id,)).fetchone())
                         updated_payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone())
                         if updated_payment:

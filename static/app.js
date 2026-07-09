@@ -424,7 +424,7 @@ function renderCaseDetail(item) {
       ${payment.id ? `
         <div class="detail-grid">
           <div><span>Referencia</span><strong>${escapeHtml(payment.reference || "-")}</strong></div>
-          <div><span>Monto</span><strong>${money(payment.amount_ves, "VES")}</strong></div>
+          <div><span>Monto reportado / validado</span><strong>${money(payment.amount_ves, "VES")}</strong></div>
           <div><span>Equivalente USD</span><strong>${money(payment.amount_usd_at_payment, "USD")}</strong></div>
           <div><span>Tasa del pago</span><strong>${Number(payment.rate_at_payment || 0).toLocaleString("es-VE", { minimumFractionDigits: 2 })}</strong></div>
           <div><span>Banco emisor</span><strong>${escapeHtml(payment.bank || "-")}</strong></div>
@@ -463,6 +463,12 @@ function renderCaseDetail(item) {
         </label>
         <label>Referencia conciliada
           <input name="validated_reference" value="${escapeHtml(payment.validated_reference || payment.reference || "")}" required />
+        </label>
+        <label>Monto validado Bs.
+          <input name="validated_amount_ves" inputmode="decimal" value="${Number(payment.amount_ves || 0).toFixed(2)}" required />
+        </label>
+        <label>Adjuntar / reemplazar comprobante
+          <input name="attachment_file" type="file" accept="image/*,application/pdf" />
         </label>
         <label>Cambiar estado
           <select name="status" required>
@@ -520,11 +526,14 @@ function labelAlert(alert) {
 
 async function updateCaseStatus(form) {
   const id = form.dataset.statusForm;
+  const attachmentFile = await readFile(form.elements.attachment_file);
   const payload = {
     status: form.elements.status.value,
     validated_reference: form.elements.validated_reference.value.trim(),
+    validated_amount_ves: form.elements.validated_amount_ves?.value.trim() || "",
     reconciliation_agent: form.elements.reconciliation_agent?.value.trim() || "",
     notes: form.elements.notes.value.trim(),
+    attachment_file: attachmentFile,
   };
   try {
     await api(`/api/cases/${id}/status`, { method: "POST", body: JSON.stringify(payload) });
