@@ -479,7 +479,8 @@ function renderCaseDetail(item) {
     ${canDelete ? `
       <section class="detail-block danger-zone">
         <h3>Administracion</h3>
-        <p class="notes">Borra este caso y sus reportes de prueba de la base interna.</p>
+        <p class="notes">Para limpiar pruebas, borra solo el ultimo pago. Borrar caso elimina la deuda completa del conductor.</p>
+        ${payment.id ? `<button class="secondary danger-action" type="button" data-delete-payment="${item.id}">Borrar ultimo pago</button>` : ""}
         <button class="secondary danger-action" type="button" data-delete-case="${item.id}">Borrar caso</button>
       </section>
     ` : ""}
@@ -535,11 +536,24 @@ async function updateCaseStatus(form) {
 }
 
 async function deleteCase(id) {
-  const confirmed = window.confirm("¿Borrar este caso y sus reportes? Esta accion solo afecta la base interna del portal.");
+  const confirmed = window.confirm("¿Borrar este caso completo? Esto elimina la deuda del conductor en el portal.");
   if (!confirmed) return;
   try {
     await api(`/api/cases/${id}/delete`, { method: "POST", body: "{}" });
     toast("Caso borrado.");
+    $("#caseModal").classList.add("hidden");
+    await loadCases();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteLastPayment(id) {
+  const confirmed = window.confirm("¿Borrar solo el ultimo pago reportado? La deuda del conductor se mantiene.");
+  if (!confirmed) return;
+  try {
+    await api(`/api/cases/${id}/delete-payment`, { method: "POST", body: "{}" });
+    toast("Pago borrado. La deuda sigue activa.");
     $("#caseModal").classList.add("hidden");
     await loadCases();
   } catch (error) {
@@ -758,6 +772,8 @@ function bindEvents() {
     if (followupButton) addFollowup(followupButton.dataset.followupCase, followupButton.dataset.followupAction);
     const unlockButton = event.target.closest("[data-unlock-case]");
     if (unlockButton) unlockCase(unlockButton.dataset.unlockCase);
+    const deletePaymentButton = event.target.closest("[data-delete-payment]");
+    if (deletePaymentButton) deleteLastPayment(deletePaymentButton.dataset.deletePayment);
     const deleteButton = event.target.closest("[data-delete-case]");
     if (deleteButton) deleteCase(deleteButton.dataset.deleteCase);
   });

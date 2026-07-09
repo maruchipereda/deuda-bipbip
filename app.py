@@ -872,6 +872,40 @@ def backup_payment_to_sheets(driver, payment, user=None):
         return {"ok": False, "error": str(exc)}
 
 
+def delete_payment_backup_from_sheets(backup_key):
+    backup_key = clean_text(backup_key)
+    service = google_service()
+    if not service or not backup_key:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
+        values_api = service.spreadsheets().values()
+        rows = values_api.get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A1:AF5000"),
+        ).execute().get("values", [])
+        for row_number, row in enumerate(rows[1:], start=2):
+            if clean_text(row[0] if row else "") == backup_key:
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=SHEET_ID,
+                    body={"requests": [{"deleteDimension": {"range": {"sheetId": sheet_id_by_name(service, PORTAL_PAYMENTS_SHEET_NAME), "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number}}}]},
+                ).execute()
+                return {"ok": True, "deleted": True}
+        return {"ok": True, "deleted": False}
+    except Exception as exc:
+        print(f"No se pudo borrar respaldo {PORTAL_PAYMENTS_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+def sheet_id_by_name(service, sheet_name):
+    spreadsheet = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_name:
+            return props.get("sheetId")
+    raise ValueError(f"No existe el tab {sheet_name}")
+
+
 def restore_payment_backups_from_sheets():
     service = google_service()
     if not service:
@@ -1720,6 +1754,16 @@ class Handler(BaseHTTPRequestHandler):
                 if user["role"] != "master":
                     return send_json(self, {"error": "Solo master puede borrar casos"}, 403)
                 driver_id = int(parsed.path.split("/")[3])
+                with db() as con:
+                    payment_backups = [
+                        row["backup_key"]
+                        for row in con.execute("select backup_key from payments where driver_id = ?", (driver_id,)).fetchall()
+                        if row["backup_key"]
+                    ]
+                for backup_key in payment_backups:
+                    delete_result = delete_payment_backup_from_sheets(backup_key)
+                    if not delete_result.get("ok"):
+                        return send_json(self, {"error": "No pude borrar el respaldo del pago en PortalPagos. No borre el caso para evitar que reaparezca.", "details": delete_result.get("error")}, 400)
                 with DB_LOCK:
                     with db() as con:
                         driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
@@ -1729,6 +1773,46 @@ class Handler(BaseHTTPRequestHandler):
                         con.execute("delete from payments where driver_id = ?", (driver_id,))
                         con.execute("delete from audit_events where driver_id = ?", (driver_id,))
                         con.execute("delete from drivers where id = ?", (driver_id,))
+                return send_json(self, {"ok": True})
+
+            if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/delete-payment"):
+                if user["role"] != "master":
+                    return send_json(self, {"error": "Solo master puede borrar pagos"}, 403)
+                driver_id = int(parsed.path.split("/")[3])
+                backup_key = ""
+                attachment_path = ""
+                with db() as con:
+                    payment = con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone()
+                    if not payment:
+                        return send_json(self, {"error": "Este caso no tiene pagos reportados"}, 404)
+                    backup_key = payment["backup_key"] or ""
+                    attachment_path = payment["attachment_path"] or ""
+                delete_result = delete_payment_backup_from_sheets(backup_key)
+                if not delete_result.get("ok"):
+                    return send_json(self, {"error": "No pude borrar el respaldo del pago en PortalPagos. No borre el pago local para evitar que reaparezca.", "details": delete_result.get("error")}, 400)
+                with DB_LOCK:
+                    with db() as con:
+                        driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
+                        if not driver:
+                            return send_json(self, {"error": "Caso no encontrado"}, 404)
+                        payment = con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone()
+                        if not payment:
+                            return send_json(self, {"error": "Este caso no tiene pagos reportados"}, 404)
+                        con.execute("delete from payments where id = ?", (payment["id"],))
+                        remaining = con.execute("select count(*) as count from payments where driver_id = ?", (driver_id,)).fetchone()["count"]
+                        if remaining == 0:
+                            con.execute("update drivers set status = 'pendiente_pago', updated_at = ? where id = ?", (now_iso(), driver_id))
+                        else:
+                            latest = con.execute("select status from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone()
+                            con.execute("update drivers set status = ?, updated_at = ? where id = ?", (latest["status"], now_iso(), driver_id))
+                        add_event(con, driver_id, user["id"], "borrado_pago", f"Pago de prueba borrado. Referencia: {payment['reference']}")
+                if attachment_path:
+                    try:
+                        path = (UPLOAD_DIR / Path(attachment_path).name).resolve()
+                        if path.exists() and (UPLOAD_DIR.resolve() in path.parents or path.parent == UPLOAD_DIR.resolve()):
+                            path.unlink()
+                    except Exception:
+                        pass
                 return send_json(self, {"ok": True})
 
             if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/unlock"):
