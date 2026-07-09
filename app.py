@@ -937,6 +937,19 @@ def maybe_sync_debts():
             set_setting(con, "sync_status", result.get("error", "Google Sheets no configurado"))
 
 
+def ensure_initial_debt_sync():
+    with db() as con:
+        imported_drivers = con.execute(
+            "select count(*) as count from drivers where source = 'google_sheets'"
+        ).fetchone()["count"]
+    if imported_drivers:
+        return
+    result = sync_debts_from_sheets(force=True)
+    if not result.get("ok"):
+        with db() as con:
+            set_setting(con, "sync_status", result.get("error", "Google Sheets no configurado"))
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1469,6 +1482,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
+    ensure_initial_debt_sync()
     port = int(os.environ.get("PORT", "8787"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Deuda BipBip corriendo en http://127.0.0.1:{port}")
