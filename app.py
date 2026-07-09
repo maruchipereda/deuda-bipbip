@@ -19,12 +19,15 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", ROOT / "uploads"))
-DB_PATH = Path(os.environ.get("DB_PATH", ROOT / "deuda_bipbip.db"))
+RAILWAY_DATA_DIR = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "/data"))
+DEFAULT_DATA_DIR = RAILWAY_DATA_DIR if RAILWAY_DATA_DIR.exists() else ROOT
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", DEFAULT_DATA_DIR / "uploads"))
+DB_PATH = Path(os.environ.get("DB_PATH", DEFAULT_DATA_DIR / "deuda_bipbip.db"))
 DEFAULT_SHEET_ID = "1DcX_PW9xfqs9eCpVl6uqng4hG1Q1ewfAYwrtiuNpOFU"
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", DEFAULT_SHEET_ID)
 DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
+PORTAL_CONFIG_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_CONFIG_SHEET", "PortalConfig")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
 SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
 AUTH_TOKENS = {}
@@ -68,6 +71,8 @@ CONCILIATED_HEADERS = [
     "fecha_desbloqueo",
     "observaciones",
 ]
+
+PORTAL_CONFIG_HEADERS = ["key", "value", "updated_at"]
 
 
 def now_iso():
@@ -561,6 +566,88 @@ def google_service():
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
+def sheet_range(sheet_name, cells):
+    return f"'{sheet_name}'!{cells}"
+
+
+def ensure_sheet_with_headers(service, sheet_name, headers):
+    spreadsheet = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+    sheets = spreadsheet.get("sheets", [])
+    if not any(item.get("properties", {}).get("title") == sheet_name for item in sheets):
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
+        ).execute()
+    last_column = column_letter(len(headers) - 1)
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range=sheet_range(sheet_name, f"A1:{last_column}1"),
+        valueInputOption="USER_ENTERED",
+        body={"values": [headers]},
+    ).execute()
+
+
+def read_portal_config_from_sheets():
+    service = google_service()
+    if not service:
+        return {}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_CONFIG_SHEET_NAME, PORTAL_CONFIG_HEADERS)
+        rows = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_CONFIG_SHEET_NAME, "A2:C500"),
+        ).execute().get("values", [])
+    except Exception as exc:
+        print(f"No se pudo leer {PORTAL_CONFIG_SHEET_NAME}: {exc}")
+        return {}
+    config = {}
+    for row in rows:
+        key = clean_text(row[0] if row else "")
+        if key:
+            config[key] = row[1] if len(row) > 1 else ""
+    return config
+
+
+def save_settings_snapshot_to_sheets(con):
+    service = google_service()
+    if not service:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_CONFIG_SHEET_NAME, PORTAL_CONFIG_HEADERS)
+        rows = [
+            [row["key"], row["value"], row["updated_at"]]
+            for row in con.execute("select key, value, updated_at from settings order by key")
+        ]
+        values_api = service.spreadsheets().values()
+        values_api.clear(spreadsheetId=SHEET_ID, range=sheet_range(PORTAL_CONFIG_SHEET_NAME, "A2:C500")).execute()
+        if rows:
+            values_api.update(
+                spreadsheetId=SHEET_ID,
+                range=sheet_range(PORTAL_CONFIG_SHEET_NAME, "A2:C500"),
+                valueInputOption="USER_ENTERED",
+                body={"values": rows},
+            ).execute()
+        return {"ok": True}
+    except Exception as exc:
+        print(f"No se pudo guardar {PORTAL_CONFIG_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+def load_settings_from_sheets(con):
+    config = read_portal_config_from_sheets()
+    if not config:
+        return False
+    for key, value in config.items():
+        set_setting(con, key, value)
+    return True
+
+
+def ensure_portal_config_snapshot(con):
+    if google_service():
+        if not read_portal_config_from_sheets():
+            save_settings_snapshot_to_sheets(con)
+
+
 def header_index(headers, candidates, fallback):
     normalized = [clean_text(item).lower().replace("é", "e").replace("á", "a").replace("ó", "o") for item in headers]
     for candidate in candidates:
@@ -849,6 +936,8 @@ def init_db():
             """
         )
         seed_data(con)
+        load_settings_from_sheets(con)
+        ensure_portal_config_snapshot(con)
 
 
 def seed_data(con):
@@ -1124,6 +1213,7 @@ class Handler(BaseHTTPRequestHandler):
                             set_setting(con, "payment_accounts_json", json.dumps(cleaned_accounts, ensure_ascii=False))
                     add_event(con, None, user["id"], "edicion_datos_bancarios", "Datos bancarios actualizados")
                     settings = get_settings(con)
+                    save_settings_snapshot_to_sheets(con)
                 return send_json(self, {"settings": settings})
 
             if parsed.path == "/api/users/save":

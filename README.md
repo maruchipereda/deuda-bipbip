@@ -49,6 +49,19 @@ Importante: comparte el Google Sheet con el email del service account con permis
 
 La sincronizacion de deudas es diaria y liviana: despues de la medianoche en `SYNC_TIMEZONE`, la primera consulta del portal o el boton manual de sincronizar lee `Deuda`, toma la tasa de `H2`, actualiza SQLite y no vuelve a leer Google Sheets hasta el dia siguiente.
 
+La configuracion de cuentas destino se guarda tambien en el tab `PortalConfig`, creado automaticamente por la app. Asi no se pierden las cuentas cuando Railway hace redeploy.
+
+## Persistencia en Railway
+
+Para que no se borren usuarios, casos, comprobantes ni sesiones de trabajo entre deploys, agrega un volumen persistente en Railway montado en `/data`. La app lo detecta automaticamente y usa:
+
+```txt
+/data/deuda_bipbip.db
+/data/uploads
+```
+
+Si no existe el volumen, Railway puede recrear el filesystem del deploy y volver a la base inicial.
+
 ## Columnas esperadas en Deuda
 
 La app detecta encabezados, pero usa este fallback si no los encuentra:
