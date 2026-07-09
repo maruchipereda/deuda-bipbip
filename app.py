@@ -73,6 +73,7 @@ CONCILIATED_HEADERS = [
 ]
 
 PORTAL_CONFIG_HEADERS = ["key", "value", "updated_at"]
+TRANSIENT_SETTING_KEYS = {"sync_status", "debt_sync_local_date", "debt_sync_version"}
 
 
 def now_iso():
@@ -620,7 +621,7 @@ def read_portal_config_from_sheets():
     config = {}
     for row in rows:
         key = clean_text(row[0] if row else "")
-        if key:
+        if key and key not in TRANSIENT_SETTING_KEYS:
             config[key] = row[1] if len(row) > 1 else ""
     return config
 
@@ -634,6 +635,7 @@ def save_settings_snapshot_to_sheets(con):
         rows = [
             [row["key"], row["value"], row["updated_at"]]
             for row in con.execute("select key, value, updated_at from settings order by key")
+            if row["key"] not in TRANSIENT_SETTING_KEYS
         ]
         values_api = service.spreadsheets().values()
         values_api.clear(spreadsheetId=SHEET_ID, range=sheet_range(PORTAL_CONFIG_SHEET_NAME, "A2:C500")).execute()
@@ -679,7 +681,10 @@ def sync_debts_from_sheets(force=False):
     if not force:
         with db() as con:
             settings = get_settings(con)
-            if settings.get("debt_sync_local_date") == today and settings.get("debt_sync_version") == SYNC_VERSION:
+            imported_drivers = con.execute(
+                "select count(*) as count from drivers where source = 'google_sheets'"
+            ).fetchone()["count"]
+            if imported_drivers and settings.get("debt_sync_local_date") == today and settings.get("debt_sync_version") == SYNC_VERSION:
                 return {"ok": True, "skipped": True, "date": today}
     service = google_service()
     if not service:
