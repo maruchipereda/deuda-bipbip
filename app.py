@@ -1328,6 +1328,7 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
     status_idx = find_header_index(headers, ["estado", "status"], 9)
     conciliado_idx = find_exact_header_index(headers, ["conciliado"], None)
     unlock_idx = find_header_index(headers, ["desbloqueo"], 10)
+    unlock_date_idx = find_exact_header_index(headers, ["fecha_desbloqueo"], 12)
     agent_idx = find_header_index(headers, ["responsable", "agente"], 8)
     date_idx = find_header_index(headers, ["fecha", "conciliacion"], 7)
     target_cedula = clean_text(driver.get("cedula"))
@@ -1348,9 +1349,11 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
     if status_idx is not None:
         updates.append((status_idx, status_label))
     if conciliado_idx is not None:
-        updates.append((conciliado_idx, "Si" if status == "conciliado" else "No"))
+        updates.append((conciliado_idx, "Si" if status in ("conciliado", "desbloqueado") else "No"))
     if unlock_idx is not None and status == "desbloqueado":
         updates.append((unlock_idx, "desbloqueado"))
+    if unlock_date_idx is not None and status == "desbloqueado":
+        updates.append((unlock_date_idx, driver.get("unlocked_at") or now_iso()))
     if agent_idx is not None:
         updates.append((agent_idx, payment.get("reconciliation_agent") or user.get("name") or ""))
     if date_idx is not None and status == "conciliado":
