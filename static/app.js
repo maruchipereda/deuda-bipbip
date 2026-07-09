@@ -28,6 +28,12 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function authenticatedUrl(url) {
+  if (!url || !state.auth?.token) return url || "";
+  const joiner = url.includes("?") ? "&" : "?";
+  return `${url}${joiner}token=${encodeURIComponent(state.auth.token)}`;
+}
+
 function money(value, currency = "VES") {
   const number = Number(value || 0);
   return new Intl.NumberFormat("es-VE", {
@@ -353,16 +359,18 @@ function renderCaseDetail(item) {
           <div><span>Banco emisor</span><strong>${escapeHtml(payment.bank || "-")}</strong></div>
           <div><span>Telefono de pago</span><strong>${escapeHtml(payment.payment_phone || "-")}</strong></div>
           <div><span>Fecha de pago</span><strong>${escapeHtml(payment.payment_date || "-")}</strong></div>
-          <div><span>Confianza</span><strong>${escapeHtml(payment.match_confidence || "bajo")}</strong></div>
         </div>
         <p class="notes">${escapeHtml(payment.observations || "")}</p>
         ${alerts.length ? `<div class="alert-list">${alerts.map((alert) => `<span>${labelAlert(alert)}</span>`).join("")}</div>` : ""}
-        ${payment.attachment_url ? `<a class="file-link" href="${payment.attachment_url}" target="_blank">Ver comprobante</a>` : ""}
+        ${payment.attachment_url ? `<button class="file-link" type="button" data-preview-receipt="${escapeHtml(payment.attachment_url)}">Ver comprobante</button>` : ""}
       ` : `<p class="notes">El conductor aun no ha reportado pago.</p>`}
     </section>
     ${canConciliate && payment.id ? `
       <form class="detail-block action-form" data-status-form="${item.id}">
         <h3>Conciliacion</h3>
+        <label>Agente
+          <input name="reconciliation_agent" value="${escapeHtml(payment.reconciliation_agent || state.user.name || "")}" required />
+        </label>
         <label>Referencia conciliada
           <input name="validated_reference" value="${escapeHtml(payment.validated_reference || payment.reference || "")}" required />
         </label>
@@ -377,6 +385,13 @@ function renderCaseDetail(item) {
           <button class="secondary" type="button" data-status-action="fraudulento">Fraude</button>
         </div>
       </form>
+    ` : ""}
+    ${state.user.role === "master" ? `
+      <section class="detail-block danger-zone">
+        <h3>Master</h3>
+        <p class="notes">Borra este caso y sus reportes de prueba de la base interna.</p>
+        <button class="secondary danger-action" type="button" data-delete-case="${item.id}">Borrar caso</button>
+      </section>
     ` : ""}
     ${canUnlock && ["conciliado", "desbloqueado"].includes(item.status) ? `
       <section class="detail-block">
@@ -416,6 +431,7 @@ async function updateCaseStatus(form, status) {
   const payload = {
     status,
     validated_reference: form.elements.validated_reference.value.trim(),
+    reconciliation_agent: form.elements.reconciliation_agent?.value.trim() || "",
     notes: form.elements.notes.value.trim(),
   };
   try {
@@ -426,6 +442,24 @@ async function updateCaseStatus(form, status) {
   } catch (error) {
     toast(error.message);
   }
+}
+
+async function deleteCase(id) {
+  const confirmed = window.confirm("¿Borrar este caso y sus reportes? Esta accion solo afecta la base interna del portal.");
+  if (!confirmed) return;
+  try {
+    await api(`/api/cases/${id}/delete`, { method: "POST", body: "{}" });
+    toast("Caso borrado.");
+    $("#caseModal").classList.add("hidden");
+    await loadCases();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openReceiptPreview(url) {
+  $("#receiptPreviewImage").src = authenticatedUrl(url);
+  $("#receiptModal").classList.remove("hidden");
 }
 
 async function unlockCase(id) {
@@ -603,13 +637,21 @@ function bindEvents() {
     if (button) openCase(button.dataset.openCase);
   });
   $("#caseDetail").addEventListener("click", (event) => {
+    const previewButton = event.target.closest("[data-preview-receipt]");
+    if (previewButton) openReceiptPreview(previewButton.dataset.previewReceipt);
     const statusButton = event.target.closest("[data-status-action]");
     if (statusButton) updateCaseStatus(statusButton.closest("form"), statusButton.dataset.statusAction);
     const unlockButton = event.target.closest("[data-unlock-case]");
     if (unlockButton) unlockCase(unlockButton.dataset.unlockCase);
+    const deleteButton = event.target.closest("[data-delete-case]");
+    if (deleteButton) deleteCase(deleteButton.dataset.deleteCase);
   });
   $$("[data-close-modal]").forEach((node) => node.addEventListener("click", () => $("#caseModal").classList.add("hidden")));
   $$("[data-close-user]").forEach((node) => node.addEventListener("click", () => $("#userModal").classList.add("hidden")));
+  $$("[data-close-receipt]").forEach((node) => node.addEventListener("click", () => {
+    $("#receiptModal").classList.add("hidden");
+    $("#receiptPreviewImage").src = "";
+  }));
   $("#settingsForm").addEventListener("submit", saveSettings);
   $("#addPaymentAccountBtn").addEventListener("click", () => {
     const accounts = readPaymentAccountsEditor();

@@ -255,6 +255,17 @@
       </form>
     </div>
 
+    <div id="receiptModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-receipt></div>
+      <div class="modal-panel receipt-panel">
+        <div class="modal-head">
+          <h2>Comprobante</h2>
+          <button class="icon-btn" type="button" data-close-receipt>×</button>
+        </div>
+        <img id="receiptPreviewImage" class="receipt-preview" alt="Comprobante de pago" />
+      </div>
+    </div>
+
     <script src="/static/app.js"></script>
   </body>
 </html>

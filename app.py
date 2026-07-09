@@ -374,9 +374,9 @@ def driver_with_latest_payment(con, where="", params=None):
                        'payment_method', payments.payment_method,
                        'observations', payments.observations,
                        'status', payments.status,
-                       'match_confidence', payments.match_confidence,
                        'alerts', payments.alerts_json,
                        'internal_notes', payments.internal_notes,
+                       'reconciliation_agent', payments.reconciliation_agent,
                        'attachment_url', case when payments.attachment_path is null then '' else '/' || payments.attachment_path end,
                        'created_at', payments.created_at,
                        'validated_reference', payments.validated_reference,
@@ -489,9 +489,7 @@ def evaluate_payment(con, driver, body):
     reference = normalize_reference(body.get("reference"))
     amount = money(body.get("amount_ves"))
     expected = money(driver["debt_ves"])
-    cedula_ok = normalize_digits(body.get("cedula")) == driver["cedula_norm"]
     phone_ok = normalize_digits(body.get("payment_phone")) == driver["phone_norm"]
-    plate_ok = clean_text(body.get("plate")).upper() and clean_text(body.get("plate")).upper() == clean_text(driver["plate"]).upper()
     amount_ok = abs(amount - expected) <= max(1.0, expected * 0.01)
     duplicate = con.execute(
         "select payments.id, drivers.cedula, drivers.phone from payments join drivers on drivers.id = payments.driver_id where payments.reference_norm = ?",
@@ -504,17 +502,9 @@ def evaluate_payment(con, driver, body):
         alerts.append("monto_no_coincide")
     if not phone_ok:
         alerts.append("pago_desde_tercero")
-    if clean_text(body.get("payment_method")) == "wallet":
-        alerts.append("posible_recarga_wallet")
     if not reference:
         alerts.append("falta_referencia")
-    if cedula_ok and amount_ok and not duplicate:
-        confidence = "alto"
-    elif amount_ok and (cedula_ok or phone_ok or plate_ok):
-        confidence = "medio"
-    else:
-        confidence = "bajo"
-    return confidence, alerts, duplicate
+    return alerts, duplicate
 
 
 def google_service():
@@ -607,6 +597,9 @@ def append_conciliated_to_sheets(driver, payment, user):
     service = google_service()
     if not service:
         return {"ok": False, "error": "Google Sheets no configurado"}
+    updated = update_conciliated_status_in_sheets(driver, payment, user, "conciliado", service=service)
+    if updated.get("ok") and updated.get("updated"):
+        return updated
     row = [
         driver.get("name") or "",
         driver.get("cedula") or "",
@@ -616,7 +609,7 @@ def append_conciliated_to_sheets(driver, payment, user):
         payment.get("amount_ves") or "",
         payment.get("validated_reference") or payment.get("reference") or "",
         payment.get("validated_at") or now_iso(),
-        user.get("name") or "",
+        payment.get("reconciliation_agent") or user.get("name") or "",
         driver.get("status") or "",
         "pendiente",
         "",
@@ -630,6 +623,79 @@ def append_conciliated_to_sheets(driver, payment, user):
         body={"values": [row]},
     ).execute()
     return {"ok": True}
+
+
+def column_letter(index):
+    value = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        value = chr(65 + remainder) + value
+    return value
+
+
+def find_header_index(headers, candidates, fallback=None):
+    normalized = [clean_text(item).lower().replace("é", "e").replace("á", "a").replace("ó", "o") for item in headers]
+    for candidate in candidates:
+        for index, header in enumerate(normalized):
+            if candidate in header:
+                return index
+    return fallback
+
+
+def update_conciliated_status_in_sheets(driver, payment, user, status, service=None):
+    service = service or google_service()
+    if not service:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    values_api = service.spreadsheets().values()
+    rows = values_api.get(spreadsheetId=SHEET_ID, range=f"{CONCILIATED_SHEET_NAME}!A1:Z5000").execute().get("values", [])
+    if not rows:
+        return {"ok": True, "updated": False}
+    headers = rows[0]
+    cedula_idx = find_header_index(headers, ["cedula", "cédula"], 1)
+    ref_idx = find_header_index(headers, ["referencia"], 6)
+    status_idx = find_header_index(headers, ["estado", "status"], 9)
+    conciliado_idx = find_header_index(headers, ["conciliado"], None)
+    unlock_idx = find_header_index(headers, ["desbloqueo"], 10)
+    agent_idx = find_header_index(headers, ["responsable", "agente"], 8)
+    date_idx = find_header_index(headers, ["fecha", "conciliacion"], 7)
+    target_cedula = clean_text(driver.get("cedula"))
+    target_ref = clean_text(payment.get("validated_reference") or payment.get("reference"))
+    target_row = None
+    for row_number, row in enumerate(rows[1:], start=2):
+        row_cedula = clean_text(row[cedula_idx] if cedula_idx is not None and cedula_idx < len(row) else "")
+        row_ref = clean_text(row[ref_idx] if ref_idx is not None and ref_idx < len(row) else "")
+        if row_cedula == target_cedula and (not target_ref or row_ref == target_ref):
+            target_row = row_number
+            break
+    if not target_row:
+        return {"ok": True, "updated": False}
+    updates = []
+    status_label = CASE_STATUSES.get(status, status)
+    if status_idx is not None:
+        updates.append((status_idx, status_label))
+    if conciliado_idx is not None:
+        updates.append((conciliado_idx, "Si" if status == "conciliado" else "No"))
+    if unlock_idx is not None and status == "desbloqueado":
+        updates.append((unlock_idx, "desbloqueado"))
+    if agent_idx is not None:
+        updates.append((agent_idx, payment.get("reconciliation_agent") or user.get("name") or ""))
+    if date_idx is not None and status == "conciliado":
+        updates.append((date_idx, payment.get("validated_at") or now_iso()))
+    for col_idx, value in updates:
+        values_api.update(
+            spreadsheetId=SHEET_ID,
+            range=f"{CONCILIATED_SHEET_NAME}!{column_letter(col_idx)}{target_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[value]]},
+        ).execute()
+    return {"ok": True, "updated": True}
+
+
+def ensure_payment_columns(con):
+    existing = {row["name"] for row in con.execute("pragma table_info(payments)")}
+    if "reconciliation_agent" not in existing:
+        con.execute("alter table payments add column reconciliation_agent text")
 
 
 def maybe_sync_debts():
@@ -702,6 +768,7 @@ def init_db():
                 match_confidence text not null default 'bajo',
                 alerts_json text not null default '[]',
                 internal_notes text,
+                reconciliation_agent text,
                 validated_reference text,
                 validated_by integer references users(id),
                 validated_at text,
@@ -710,6 +777,7 @@ def init_db():
             )
             """
         )
+        ensure_payment_columns(con)
         con.execute("create index if not exists idx_payments_reference on payments(reference_norm)")
         con.execute(
             """
@@ -865,7 +933,7 @@ class Handler(BaseHTTPRequestHandler):
             cases = list_cases(user, parse_qs(parsed.query))
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["nombre", "cedula", "telefono", "placa", "driver_id", "deuda_usd", "tasa", "deuda_ves", "estado", "referencia", "monto_reportado", "confianza", "actualizado"])
+            writer.writerow(["nombre", "cedula", "telefono", "placa", "driver_id", "deuda_usd", "tasa", "deuda_ves", "estado", "referencia", "monto_reportado", "actualizado"])
             for item in cases:
                 payment = item.get("payment") or {}
                 writer.writerow([
@@ -880,7 +948,6 @@ class Handler(BaseHTTPRequestHandler):
                     item.get("status_label") or item.get("status"),
                     payment.get("reference", ""),
                     payment.get("amount_ves", ""),
-                    payment.get("match_confidence", ""),
                     item.get("updated_at", ""),
                 ])
             return send_text(self, output.getvalue(), "text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="deuda-bipbip.csv"'})
@@ -912,7 +979,7 @@ class Handler(BaseHTTPRequestHandler):
                             driver = con.execute("select * from drivers where cedula_norm = ?", (normalize_digits(body.get("cedula")),)).fetchone()
                         if not driver:
                             return send_json(self, {"error": "No encontramos el caso de deuda para esa cedula."}, 404)
-                        confidence, alerts, duplicate = evaluate_payment(con, driver, body)
+                        alerts, duplicate = evaluate_payment(con, driver, body)
                         if duplicate:
                             return send_json(
                                 self,
@@ -929,8 +996,8 @@ class Handler(BaseHTTPRequestHandler):
                             insert into payments (
                                 driver_id, cedula, payment_phone, plate, amount_ves, reference, reference_norm,
                                 bank, payment_date, payment_method, observations, attachment_path, attachment_name,
-                                attachment_type, status, match_confidence, alerts_json, created_at, updated_at
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
+                                attachment_type, status, alerts_json, created_at, updated_at
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?)
                             """,
                             (
                                 driver["id"],
@@ -947,14 +1014,13 @@ class Handler(BaseHTTPRequestHandler):
                                 attachment_path,
                                 attachment_name,
                                 attachment_type,
-                                confidence,
                                 json.dumps(alerts, ensure_ascii=False),
                                 timestamp,
                                 timestamp,
                             ),
                         ).lastrowid
                         con.execute("update drivers set status = 'pago_reportado', plate = coalesce(nullif(?, ''), plate), updated_at = ? where id = ?", (clean_text(body.get("plate")).upper(), timestamp, driver["id"]))
-                        add_event(con, driver["id"], None, "submission_formulario", "Pago reportado por conductor", {"payment_id": payment_id, "confidence": confidence, "alerts": alerts})
+                        add_event(con, driver["id"], None, "submission_formulario", "Pago reportado por conductor", {"payment_id": payment_id, "alerts": alerts})
                 return send_json(self, {"ok": True, "message": "Pago reportado. El equipo de conciliacion lo revisara."}, 201)
 
             user = require_user(self)
@@ -1050,6 +1116,7 @@ class Handler(BaseHTTPRequestHandler):
                 status = clean_text(body.get("status"))
                 notes = clean_text(body.get("notes"))
                 validated_reference = clean_text(body.get("validated_reference"))
+                reconciliation_agent = clean_text(body.get("reconciliation_agent")) or user["name"]
                 if status not in CASE_STATUSES:
                     return send_json(self, {"error": "Estado invalido"}, 400)
                 if status == "duplicado":
@@ -1070,24 +1137,42 @@ class Handler(BaseHTTPRequestHandler):
                             con.execute(
                                 """
                                 update payments set status = ?, internal_notes = ?, validated_reference = coalesce(nullif(?, ''), reference),
-                                    validated_by = ?, validated_at = ?, updated_at = ?
+                                    reconciliation_agent = ?, validated_by = ?, validated_at = ?, updated_at = ?
                                 where id = ?
                                 """,
-                                (status, notes, validated_reference, user["id"], timestamp, timestamp, payment["id"]),
+                                (status, notes, validated_reference, reconciliation_agent, user["id"], timestamp, timestamp, payment["id"]),
                             )
                         con.execute("update drivers set status = ?, updated_at = ? where id = ?", (status, timestamp, driver_id))
                         add_event(con, driver_id, user["id"], "cambio_estado", f"Estado cambiado a {CASE_STATUSES[status]}. {notes}", {"status": status})
                         updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver_id,)).fetchone())
                         updated_payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone())
-                        if status == "conciliado" and updated_payment:
+                        if updated_payment:
                             try:
-                                sync_result = append_conciliated_to_sheets(updated_driver, updated_payment, user)
+                                if status == "conciliado":
+                                    sync_result = append_conciliated_to_sheets(updated_driver, updated_payment, user)
+                                else:
+                                    sync_result = update_conciliated_status_in_sheets(updated_driver, updated_payment, user, status)
                                 if sync_result.get("ok"):
-                                    add_event(con, driver_id, user["id"], "sync_conciliados", "Caso agregado al tab Conciliados")
+                                    add_event(con, driver_id, user["id"], "sync_conciliados", f"Tab Conciliados actualizado: {CASE_STATUSES[status]}")
                                 else:
                                     add_event(con, driver_id, user["id"], "sync_conciliados_error", sync_result.get("error", "Google Sheets no configurado"))
                             except Exception as exc:
                                 add_event(con, driver_id, user["id"], "sync_conciliados_error", str(exc))
+                return send_json(self, {"ok": True})
+
+            if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/delete"):
+                if user["role"] != "master":
+                    return send_json(self, {"error": "Solo master puede borrar casos"}, 403)
+                driver_id = int(parsed.path.split("/")[3])
+                with DB_LOCK:
+                    with db() as con:
+                        driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
+                        if not driver:
+                            return send_json(self, {"error": "Caso no encontrado"}, 404)
+                        add_event(con, driver_id, user["id"], "borrado_caso", "Caso borrado por master")
+                        con.execute("delete from payments where driver_id = ?", (driver_id,))
+                        con.execute("delete from audit_events where driver_id = ?", (driver_id,))
+                        con.execute("delete from drivers where id = ?", (driver_id,))
                 return send_json(self, {"ok": True})
 
             if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/unlock"):
@@ -1103,6 +1188,13 @@ class Handler(BaseHTTPRequestHandler):
                         return send_json(self, {"error": "Solo puedes desbloquear casos conciliados"}, 400)
                     con.execute("update drivers set status = 'desbloqueado', unlocked_by = ?, unlocked_at = ?, updated_at = ? where id = ?", (user["id"], timestamp, timestamp, driver_id))
                     add_event(con, driver_id, user["id"], "desbloqueo_wallet", "Wallet marcada como desbloqueada")
+                    payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone())
+                    updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver_id,)).fetchone())
+                    if payment:
+                        try:
+                            update_conciliated_status_in_sheets(updated_driver, payment, user, "desbloqueado")
+                        except Exception as exc:
+                            add_event(con, driver_id, user["id"], "sync_conciliados_error", str(exc))
                 return send_json(self, {"ok": True})
 
             return send_json(self, {"error": "No encontrado"}, 404)
