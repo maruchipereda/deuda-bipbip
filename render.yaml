@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: deuda-bipbip
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.5
+      - key: GOOGLE_SHEET_ID
+        value: 1DcX_PW9xfqs9eCpVl6uqng4hG1Q1ewfAYwrtiuNpOFU
+      - key: GOOGLE_DEBT_SHEET
+        value: Deuda
+      - key: GOOGLE_CONCILIATED_SHEET
+        value: Conciliados

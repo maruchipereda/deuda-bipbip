@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BipBip | Conciliacion de deuda</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"></path><path d="m7 9 5-5 5 5"></path><path d="M5 20h14"></path></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.8-4"></path><path d="M4 5v5h5"></path><path d="M4 13a8 8 0 0 0 14.8 4"></path><path d="M20 19v-5h-5"></path></symbol>
+    </svg>
+
+    <div id="toast" class="toast"></div>
+
+    <section id="publicView" class="public-shell">
+      <header class="public-top">
+        <img src="/static/bipbip-logo.png" alt="BipBip" />
+        <button id="openAdminBtn" class="ghost-btn" type="button">Equipo</button>
+      </header>
+
+      <main class="driver-flow">
+        <section class="lookup-panel">
+          <p class="eyebrow">Wallet bloqueada por saldo negativo</p>
+          <h1>Consulta y reporta tu pago</h1>
+          <form id="lookupForm" class="lookup-form">
+            <label>Cedula
+              <input id="lookupCedula" autocomplete="off" inputmode="numeric" required />
+            </label>
+            <label>Telefono registrado
+              <input id="lookupPhone" autocomplete="tel" inputmode="tel" required />
+            </label>
+            <button type="submit"><svg><use href="#i-search"></use></svg>Consultar deuda</button>
+          </form>
+        </section>
+
+        <section id="debtPanel" class="debt-panel hidden">
+          <div class="amount-card">
+            <span>Monto exacto a pagar</span>
+            <strong id="debtVes">Bs 0,00</strong>
+            <small id="debtUsd">USD 0,00</small>
+            <small id="debtRate">Tasa: 0,00</small>
+          </div>
+
+          <div class="warning strong">Debes pagar exactamente el monto indicado y reportarlo aqui para poder ser desbloqueado.</div>
+          <div class="warning">Por favor paga a la cuenta bancaria indicada para evitar errores de conciliacion.</div>
+          <div class="warning danger">No recargues el dinero en tu billetera. Debes pagar a esta cuenta especifica para evitar el cobro del IVA correspondiente a recargas de comision.</div>
+
+          <section class="bank-box">
+            <h2>Cuenta destino</h2>
+            <dl>
+              <div><dt>Banco</dt><dd id="bankName">-</dd></div>
+              <div><dt>Titular</dt><dd id="accountHolder">-</dd></div>
+              <div><dt>Cuenta</dt><dd id="accountNumber">-</dd></div>
+              <div><dt>RIF</dt><dd id="rif">-</dd></div>
+            </dl>
+            <p id="bankInstructions"></p>
+          </section>
+
+          <section class="status-strip">
+            <span>Estado del caso</span>
+            <strong id="caseStatus">Pendiente de pago</strong>
+          </section>
+
+          <form id="paymentForm" class="payment-form">
+            <h2>Reportar pago</h2>
+            <div class="form-grid">
+              <label>Cedula
+                <input id="payCedula" required readonly />
+              </label>
+              <label>Telefono desde el que pagaste
+                <input id="payPhone" autocomplete="tel" inputmode="tel" required />
+              </label>
+              <label>Placa
+                <input id="payPlate" autocomplete="off" required />
+              </label>
+              <label>Monto pagado en bolivares
+                <input id="payAmount" inputmode="decimal" required />
+              </label>
+              <label>Referencia bancaria
+                <input id="payReference" autocomplete="off" required />
+              </label>
+              <label>Banco emisor
+                <input id="payBank" required />
+              </label>
+              <label>Fecha del pago
+                <input id="payDate" type="date" required />
+              </label>
+              <label>Tipo de pago
+                <select id="payMethod" required>
+                  <option value="transferencia">Transferencia a cuenta indicada</option>
+                  <option value="wallet">Recarga en wallet</option>
+                  <option value="tercero">Pago desde cuenta de tercero</option>
+                  <option value="otro">Otro</option>
+                </select>
+              </label>
+              <label class="span-2">Screenshot / comprobante
+                <input id="payFile" type="file" accept="image/*,.pdf" required />
+              </label>
+              <label class="span-2">Observaciones
+                <textarea id="payObservations" rows="4" required></textarea>
+              </label>
+            </div>
+            <button type="submit"><svg><use href="#i-upload"></use></svg>Enviar reporte</button>
+          </form>
+        </section>
+      </main>
+    </section>
+
+    <section id="adminLoginView" class="login-shell hidden">
+      <form id="loginForm" class="login-card">
+        <img src="/static/bipbip-logo.png" alt="BipBip" />
+        <h1>Conciliacion</h1>
+        <label>Email
+          <input id="loginEmail" type="email" autocomplete="username" required />
+        </label>
+        <label>Clave
+          <input id="loginPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Entrar</button>
+        <button id="backPublicBtn" class="secondary" type="button">Volver al portal</button>
+      </form>
+    </section>
+
+    <section id="adminApp" class="admin-shell hidden">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="/static/bipbip-logo.png" alt="BipBip" />
+          <div><strong>Deudas</strong><small id="sessionLabel"></small></div>
+        </div>
+        <nav id="adminNav">
+          <button class="nav-btn active" data-bucket="pendientes" type="button">Pendientes</button>
+          <button class="nav-btn" data-bucket="reportados" type="button">Pagos reportados</button>
+          <button class="nav-btn" data-bucket="validacion" type="button">En validacion</button>
+          <button class="nav-btn" data-bucket="conciliados" type="button">Conciliados</button>
+          <button class="nav-btn" data-bucket="rechazados" type="button">Rechazados</button>
+          <button class="nav-btn" data-bucket="duplicados" type="button">Duplicados / fraude</button>
+          <button class="nav-btn" data-bucket="desbloqueo" type="button">Lista para desbloqueo</button>
+          <button class="nav-btn manage-only" data-view="settings" type="button">Cuenta bancaria</button>
+          <button class="nav-btn manage-only" data-view="users" type="button">Usuarios</button>
+        </nav>
+        <button id="logoutBtn" class="sidebar-exit" type="button">Salir</button>
+      </aside>
+
+      <main class="admin-main">
+        <header class="admin-top">
+          <div>
+            <p class="eyebrow">Panel interno</p>
+            <h1 id="adminTitle">Pendientes</h1>
+          </div>
+          <div class="admin-actions">
+            <input id="caseSearch" placeholder="Buscar cedula, telefono, placa" />
+            <button id="syncBtn" class="secondary manage-only" type="button" title="Sincronizar Google Sheets"><svg><use href="#i-refresh"></use></svg></button>
+            <button id="exportBtn" class="secondary" type="button" title="Exportar CSV"><svg><use href="#i-download"></use></svg></button>
+          </div>
+        </header>
+
+        <section id="casesView" class="admin-view active">
+          <div id="metrics" class="metrics"></div>
+          <div id="caseTable" class="case-table"></div>
+        </section>
+
+        <section id="settingsView" class="admin-view">
+          <form id="settingsForm" class="settings-card">
+            <h2>Datos bancarios</h2>
+            <div class="form-grid">
+              <label>Banco<input id="setBank" required /></label>
+              <label>Titular<input id="setHolder" required /></label>
+              <label>Numero de cuenta<input id="setAccount" required /></label>
+              <label>RIF<input id="setRif" required /></label>
+              <label class="span-2">Instrucciones<textarea id="setInstructions" rows="5" required></textarea></label>
+            </div>
+            <button type="submit">Guardar</button>
+          </form>
+        </section>
+
+        <section id="usersView" class="admin-view">
+          <div class="settings-card">
+            <div class="section-head">
+              <h2>Usuarios</h2>
+              <button id="newUserBtn" type="button">Nuevo usuario</button>
+            </div>
+            <div id="usersTable" class="users-table"></div>
+          </div>
+        </section>
+      </main>
+    </section>
+
+    <div id="caseModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-modal></div>
+      <div class="modal-panel">
+        <div class="modal-head">
+          <h2 id="modalTitle">Detalle</h2>
+          <button class="icon-btn" type="button" data-close-modal>×</button>
+        </div>
+        <div id="caseDetail" class="case-detail"></div>
+      </div>
+    </div>
+
+    <div id="userModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-user></div>
+      <form id="userForm" class="modal-panel small">
+        <div class="modal-head">
+          <h2>Usuario</h2>
+          <button class="icon-btn" type="button" data-close-user>×</button>
+        </div>
+        <input id="userId" type="hidden" />
+        <label>Nombre<input id="userName" required /></label>
+        <label>Email<input id="userEmail" type="email" required /></label>
+        <label>Rol
+          <select id="userRole" required>
+            <option value="master">Master</option>
+            <option value="admin">Admin</option>
+            <option value="conciliacion">Conciliacion</option>
+            <option value="operaciones">Operaciones</option>
+          </select>
+        </label>
+        <label>Clave<input id="userPassword" type="password" placeholder="Dejar vacia para no cambiar" /></label>
+        <label class="check-row"><input id="userActive" type="checkbox" checked /><span>Activo</span></label>
+        <button type="submit">Guardar usuario</button>
+      </form>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+*.db
+*.sqlite
+__pycache__/
+.DS_Store
+.env
+uploads/*
+!uploads/.gitkeep
