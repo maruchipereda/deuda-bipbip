@@ -368,7 +368,8 @@ function caseRow(item) {
       </div>
       <div>
         <strong>${money(item.debt_ves, "VES")}</strong>
-        <small>${money(item.debt_usd, "USD")} · tasa ${Number(item.rate || 0).toFixed(2)}</small>
+        <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.missing_after_reports_ves, "VES")}</small>
+        ${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : ""}
       </div>
       <div>
         <strong>${escapeHtml(payment.reference || "-")}</strong>
@@ -414,8 +415,10 @@ function renderCaseDetail(item) {
       <div><span>Placa</span><strong>${escapeHtml(item.plate || "-")}</strong></div>
       <div><span>Driver ID</span><strong>${escapeHtml(item.driver_external_id || "-")}</strong></div>
       <div><span>Deuda</span><strong>${money(item.debt_ves, "VES")}</strong></div>
-      <div><span>Abonado</span><strong>${money(item.paid_ves, "VES")}</strong></div>
-      <div><span>Pendiente</span><strong>${money(item.pending_ves, "VES")}</strong></div>
+      <div><span>Abonado conciliado</span><strong>${money(item.paid_ves, "VES")}</strong></div>
+      <div><span>Reportado por revisar</span><strong>${money(item.review_ves, "VES")}</strong></div>
+      <div><span>Falta por cubrir</span><strong>${money(item.missing_after_reports_ves, "VES")}</strong></div>
+      <div><span>Senal</span><strong>${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : "Aun falta pago"}</strong></div>
     </section>
     <section class="detail-block">
       <h3>Pago reportado</h3>

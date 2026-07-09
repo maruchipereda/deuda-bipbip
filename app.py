@@ -407,17 +407,31 @@ def public_driver(row, include_events=False):
     if not data:
         return None
     paid_ves = money(data.get("paid_ves"))
+    review_ves = money(data.get("review_ves"))
+    coverage_ves = paid_ves + review_ves
     pending_ves = max(0.0, money(data.get("debt_ves")) - paid_ves)
+    missing_after_reports_ves = max(0.0, money(data.get("debt_ves")) - coverage_ves)
     rate = money(data.get("rate"))
     paid_usd = paid_ves / rate if rate else 0.0
+    review_usd = review_ves / rate if rate else 0.0
+    coverage_usd = coverage_ves / rate if rate else 0.0
     pending_usd = max(0.0, money(data.get("debt_usd")) - paid_usd)
+    missing_after_reports_usd = max(0.0, money(data.get("debt_usd")) - coverage_usd)
     data["debt_usd"] = money(data.get("debt_usd"))
     data["debt_ves"] = money(data.get("debt_ves"))
     data["rate"] = rate
     data["paid_ves"] = paid_ves
     data["paid_usd"] = paid_usd
+    data["review_ves"] = review_ves
+    data["review_usd"] = review_usd
+    data["coverage_ves"] = coverage_ves
+    data["coverage_usd"] = coverage_usd
     data["pending_ves"] = pending_ves
     data["pending_usd"] = pending_usd
+    data["missing_after_reports_ves"] = missing_after_reports_ves
+    data["missing_after_reports_usd"] = missing_after_reports_usd
+    debt_ves = money(data.get("debt_ves"))
+    data["ready_to_conciliate"] = debt_ves > 0 and coverage_ves >= debt_ves - max(1.0, debt_ves * 0.01)
     data["successful_call_count"] = int(data.get("successful_call_count") or 0)
     data["missed_call_count"] = int(data.get("missed_call_count") or 0)
     data["followup_count"] = int(data.get("followup_count") or 0)
@@ -497,7 +511,12 @@ def driver_with_latest_payment(con, where="", params=None):
                    select sum(payments.amount_ves)
                    from payments
                    where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
-               ), 0) as paid_ves
+               ), 0) as paid_ves,
+               coalesce((
+                   select sum(payments.amount_ves)
+                   from payments
+                   where payments.driver_id = drivers.id and payments.status in ('pago_reportado', 'en_validacion')
+               ), 0) as review_ves
         from drivers
         {where}
         order by drivers.updated_at desc
