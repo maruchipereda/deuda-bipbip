@@ -13,3 +13,5 @@ services:
         value: Deuda
       - key: GOOGLE_CONCILIATED_SHEET
         value: Conciliados
+      - key: SYNC_TIMEZONE
+        value: America/Caracas

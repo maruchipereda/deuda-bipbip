@@ -40,11 +40,14 @@ GOOGLE_SHEET_ID=1DcX_PW9xfqs9eCpVl6uqng4hG1Q1ewfAYwrtiuNpOFU
 GOOGLE_DEBT_SHEET=Deuda
 GOOGLE_CONCILIATED_SHEET=Conciliados
 GOOGLE_SERVICE_ACCOUNT_JSON={...json de service account...}
+SYNC_TIMEZONE=America/Caracas
 ```
 
 Tambien puedes usar `GOOGLE_APPLICATION_CREDENTIALS=/ruta/service-account.json`.
 
 Importante: comparte el Google Sheet con el email del service account con permisos de editor. Sin eso, Google devolvera `403 Forbidden`.
+
+La sincronizacion de deudas es diaria y liviana: despues de la medianoche en `SYNC_TIMEZONE`, la primera consulta del portal o el boton manual de sincronizar lee `Deuda`, toma la tasa de `H2`, actualiza SQLite y no vuelve a leer Google Sheets hasta el dia siguiente.
 
 ## Columnas esperadas en Deuda
 

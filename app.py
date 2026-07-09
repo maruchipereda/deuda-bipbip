@@ -9,10 +9,11 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,10 +24,9 @@ DEFAULT_SHEET_ID = "1DcX_PW9xfqs9eCpVl6uqng4hG1Q1ewfAYwrtiuNpOFU"
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", DEFAULT_SHEET_ID)
 DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
-SYNC_INTERVAL_SECONDS = int(os.environ.get("SHEETS_SYNC_INTERVAL_SECONDS", "1800"))
+SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
 AUTH_TOKENS = {}
 DB_LOCK = threading.Lock()
-LAST_SYNC = None
 
 CASE_STATUSES = {
     "pendiente_pago": "Pendiente de pago",
@@ -53,6 +53,10 @@ BUCKETS = {
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def local_sync_date():
+    return datetime.now(SYNC_TIMEZONE).date().isoformat()
 
 
 def db():
@@ -237,6 +241,7 @@ def get_settings(con):
         "account_holder": "BipBip",
         "instructions": "Paga exactamente el monto indicado, guarda el comprobante y reportalo aqui. No recargues tu billetera.",
         "sync_status": "Sin sincronizacion todavia",
+        "debt_sync_local_date": "",
     }
     defaults.update(data)
     return defaults
@@ -497,9 +502,12 @@ def header_index(headers, candidates, fallback):
 
 
 def sync_debts_from_sheets(force=False):
-    global LAST_SYNC
-    if LAST_SYNC and not force and datetime.now(timezone.utc) - LAST_SYNC < timedelta(seconds=SYNC_INTERVAL_SECONDS):
-        return {"ok": True, "skipped": True}
+    today = local_sync_date()
+    if not force:
+        with db() as con:
+            settings = get_settings(con)
+            if settings.get("debt_sync_local_date") == today:
+                return {"ok": True, "skipped": True, "date": today}
     service = google_service()
     if not service:
         return {"ok": False, "error": "Configura GOOGLE_SERVICE_ACCOUNT_JSON o GOOGLE_APPLICATION_CREDENTIALS para sincronizar Google Sheets."}
@@ -546,8 +554,8 @@ def sync_debts_from_sheets(force=False):
                 )
                 imported += 1
             set_setting(con, "sync_status", f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()}")
-    LAST_SYNC = datetime.now(timezone.utc)
-    return {"ok": True, "imported": imported}
+            set_setting(con, "debt_sync_local_date", today)
+    return {"ok": True, "imported": imported, "date": today}
 
 
 def append_conciliated_to_sheets(driver, payment, user):
@@ -708,6 +716,7 @@ def seed_data(con):
         "account_holder": "BipBip",
         "instructions": "Realiza una transferencia a esta cuenta por el monto exacto indicado. Guarda el comprobante y reportalo aqui. No recargues el dinero en tu billetera para evitar el cobro de IVA correspondiente a recargas de comision.",
         "sync_status": "Pendiente por configurar Google Sheets",
+        "debt_sync_local_date": "",
     }
     for key, value in defaults.items():
         set_setting(con, key, value)
