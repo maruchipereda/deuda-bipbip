@@ -1303,6 +1303,15 @@ def find_header_index(headers, candidates, fallback=None):
     return fallback
 
 
+def find_exact_header_index(headers, candidates, fallback=None):
+    normalized = [clean_text(item).lower().replace("é", "e").replace("á", "a").replace("ó", "o") for item in headers]
+    exact_candidates = [clean_text(item).lower().replace("é", "e").replace("á", "a").replace("ó", "o") for item in candidates]
+    for index, header in enumerate(normalized):
+        if header in exact_candidates:
+            return index
+    return fallback
+
+
 def update_conciliated_status_in_sheets(driver, payment, user, status, service=None):
     service = service or google_service()
     if not service:
@@ -1315,8 +1324,9 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
     headers = rows[0]
     cedula_idx = find_header_index(headers, ["cedula", "cédula"], 1)
     ref_idx = find_header_index(headers, ["referencia"], 6)
+    amount_idx = find_exact_header_index(headers, ["monto_conciliado"], 5)
     status_idx = find_header_index(headers, ["estado", "status"], 9)
-    conciliado_idx = find_header_index(headers, ["conciliado"], None)
+    conciliado_idx = find_exact_header_index(headers, ["conciliado"], None)
     unlock_idx = find_header_index(headers, ["desbloqueo"], 10)
     agent_idx = find_header_index(headers, ["responsable", "agente"], 8)
     date_idx = find_header_index(headers, ["fecha", "conciliacion"], 7)
@@ -1333,6 +1343,8 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
         return {"ok": True, "updated": False}
     updates = []
     status_label = CASE_STATUSES.get(status, status)
+    if amount_idx is not None:
+        updates.append((amount_idx, payment.get("amount_ves") or ""))
     if status_idx is not None:
         updates.append((status_idx, status_label))
     if conciliado_idx is not None:
