@@ -54,13 +54,8 @@
           <div class="warning danger">No recargues el dinero en tu billetera. Debes pagar a esta cuenta especifica para evitar el cobro del IVA correspondiente a recargas de comision.</div>
 
           <section class="bank-box">
-            <h2>Cuenta destino</h2>
-            <dl>
-              <div><dt>Banco</dt><dd id="bankName">-</dd></div>
-              <div><dt>Titular</dt><dd id="accountHolder">-</dd></div>
-              <div><dt>Cuenta</dt><dd id="accountNumber">-</dd></div>
-              <div><dt>RIF</dt><dd id="rif">-</dd></div>
-            </dl>
+            <h2>Cuentas destino</h2>
+            <div id="paymentAccountCards" class="payment-account-cards"></div>
             <p id="bankInstructions"></p>
           </section>
 
@@ -197,12 +192,16 @@
 
         <section id="settingsView" class="admin-view">
           <form id="settingsForm" class="settings-card">
-            <h2>Datos bancarios</h2>
-            <div class="form-grid">
-              <label>Banco<input id="setBank" required /></label>
-              <label>Titular<input id="setHolder" required /></label>
-              <label>Numero de cuenta<input id="setAccount" required /></label>
-              <label>RIF<input id="setRif" required /></label>
+            <div class="section-head">
+              <h2>Cuentas de pago</h2>
+              <button id="addPaymentAccountBtn" type="button">Agregar cuenta</button>
+            </div>
+            <div id="paymentAccountsEditor" class="payment-accounts-editor"></div>
+            <div class="form-grid settings-legacy hidden" aria-hidden="true">
+              <label>Banco<input id="setBank" /></label>
+              <label>Titular<input id="setHolder" /></label>
+              <label>Numero de cuenta<input id="setAccount" /></label>
+              <label>RIF<input id="setRif" /></label>
               <label class="span-2">Instrucciones<textarea id="setInstructions" rows="5" required></textarea></label>
             </div>
             <button type="submit">Guardar</button>

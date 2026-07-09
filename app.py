@@ -247,17 +247,47 @@ def save_upload(file_info):
 def get_settings(con):
     rows = con.execute("select key, value from settings").fetchall()
     data = {row["key"]: row["value"] for row in rows}
+    legacy_account = {
+        "type": "Transferencia a cuenta indicada",
+        "bank_name": data.get("bank_name", "Banco por configurar"),
+        "account_holder": data.get("account_holder", "BipBip"),
+        "account_number": data.get("account_number", "0000-0000-00-0000000000"),
+        "rif": data.get("rif", "J-00000000-0"),
+        "phone": "",
+        "document": data.get("rif", "J-00000000-0"),
+        "instructions": "Usa esta cuenta solo para transferencia bancaria.",
+    }
     defaults = {
         "bank_name": "Banco por configurar",
         "account_number": "0000-0000-00-0000000000",
         "rif": "J-00000000-0",
         "account_holder": "BipBip",
         "instructions": "Paga exactamente el monto indicado, guarda el comprobante y reportalo aqui. No recargues tu billetera.",
+        "payment_accounts_json": json.dumps([
+            {
+                "type": "Pago movil",
+                "bank_name": "Banco por configurar",
+                "account_holder": "BipBip",
+                "account_number": "",
+                "rif": "J-00000000-0",
+                "phone": "0000000000",
+                "document": "J-00000000-0",
+                "instructions": "Realiza un pago movil por el monto exacto indicado.",
+            },
+            legacy_account,
+        ], ensure_ascii=False),
         "sync_status": "Sin sincronizacion todavia",
         "debt_sync_local_date": "",
         "debt_sync_version": "",
     }
     defaults.update(data)
+    try:
+        accounts = json.loads(defaults.get("payment_accounts_json") or "[]")
+    except json.JSONDecodeError:
+        accounts = []
+    if not accounts:
+        accounts = [legacy_account]
+    defaults["payment_accounts"] = accounts
     return defaults
 
 
@@ -730,6 +760,28 @@ def seed_data(con):
         "rif": "J-00000000-0",
         "account_holder": "BipBip",
         "instructions": "Realiza una transferencia a esta cuenta por el monto exacto indicado. Guarda el comprobante y reportalo aqui. No recargues el dinero en tu billetera para evitar el cobro de IVA correspondiente a recargas de comision.",
+        "payment_accounts_json": json.dumps([
+            {
+                "type": "Pago movil",
+                "bank_name": "Banco Nacional de Credito",
+                "account_holder": "BipBip",
+                "account_number": "",
+                "rif": "J-00000000-0",
+                "phone": "0000000000",
+                "document": "J-00000000-0",
+                "instructions": "Realiza un pago movil por el monto exacto indicado.",
+            },
+            {
+                "type": "Transferencia a cuenta indicada",
+                "bank_name": "Banco Nacional de Credito",
+                "account_holder": "BipBip",
+                "account_number": "0191-0000-00-0000000000",
+                "rif": "J-00000000-0",
+                "phone": "",
+                "document": "J-00000000-0",
+                "instructions": "Realiza una transferencia bancaria por el monto exacto indicado.",
+            },
+        ], ensure_ascii=False),
         "sync_status": "Pendiente por configurar Google Sheets",
         "debt_sync_local_date": "",
         "debt_sync_version": "",
@@ -934,6 +986,26 @@ class Handler(BaseHTTPRequestHandler):
                 with db() as con:
                     for key in ["bank_name", "account_number", "rif", "account_holder", "instructions"]:
                         set_setting(con, key, body.get(key))
+                    payment_accounts = body.get("payment_accounts")
+                    if isinstance(payment_accounts, list):
+                        cleaned_accounts = []
+                        for account in payment_accounts[:6]:
+                            if not isinstance(account, dict):
+                                continue
+                            if not clean_text(account.get("type")):
+                                continue
+                            cleaned_accounts.append({
+                                "type": clean_text(account.get("type")),
+                                "bank_name": clean_text(account.get("bank_name")),
+                                "account_holder": clean_text(account.get("account_holder")),
+                                "account_number": clean_text(account.get("account_number")),
+                                "rif": clean_text(account.get("rif")),
+                                "phone": clean_text(account.get("phone")),
+                                "document": clean_text(account.get("document")),
+                                "instructions": clean_text(account.get("instructions")),
+                            })
+                        if cleaned_accounts:
+                            set_setting(con, "payment_accounts_json", json.dumps(cleaned_accounts, ensure_ascii=False))
                     add_event(con, None, user["id"], "edicion_datos_bancarios", "Datos bancarios actualizados")
                     settings = get_settings(con)
                 return send_json(self, {"settings": settings})

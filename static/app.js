@@ -107,11 +107,38 @@ async function loadPublicConfig() {
 }
 
 function renderBankSettings() {
-  $("#bankName").textContent = state.settings.bank_name || "-";
-  $("#accountHolder").textContent = state.settings.account_holder || "-";
-  $("#accountNumber").textContent = state.settings.account_number || "-";
-  $("#rif").textContent = state.settings.rif || "-";
+  const accounts = paymentAccounts();
+  $("#paymentAccountCards").innerHTML = accounts.map((account) => `
+    <article class="payment-account-card">
+      <div class="account-type">${escapeHtml(account.type || "Cuenta")}</div>
+      <dl>
+        <div><dt>Banco</dt><dd>${escapeHtml(account.bank_name || "-")}</dd></div>
+        <div><dt>Titular</dt><dd>${escapeHtml(account.account_holder || "-")}</dd></div>
+        ${account.account_number ? `<div><dt>Cuenta</dt><dd>${escapeHtml(account.account_number)}</dd></div>` : ""}
+        ${account.phone ? `<div><dt>Telefono</dt><dd>${escapeHtml(account.phone)}</dd></div>` : ""}
+        ${account.document ? `<div><dt>Documento</dt><dd>${escapeHtml(account.document)}</dd></div>` : ""}
+        ${account.rif && account.rif !== account.document ? `<div><dt>RIF</dt><dd>${escapeHtml(account.rif)}</dd></div>` : ""}
+      </dl>
+      ${account.instructions ? `<p>${escapeHtml(account.instructions)}</p>` : ""}
+    </article>
+  `).join("");
   $("#bankInstructions").textContent = state.settings.instructions || "";
+}
+
+function paymentAccounts() {
+  if (Array.isArray(state.settings.payment_accounts) && state.settings.payment_accounts.length) {
+    return state.settings.payment_accounts;
+  }
+  return [{
+    type: "Transferencia a cuenta indicada",
+    bank_name: state.settings.bank_name || "",
+    account_holder: state.settings.account_holder || "",
+    account_number: state.settings.account_number || "",
+    rif: state.settings.rif || "",
+    document: state.settings.rif || "",
+    phone: "",
+    instructions: "Usa esta cuenta solo para transferencia bancaria.",
+  }];
 }
 
 async function lookupDebt(event) {
@@ -216,6 +243,7 @@ function hydrateSettings() {
   $("#setAccount").value = state.settings.account_number || "";
   $("#setRif").value = state.settings.rif || "";
   $("#setInstructions").value = state.settings.instructions || "";
+  renderPaymentAccountsEditor();
 }
 
 function setBucket(bucket) {
@@ -414,6 +442,11 @@ async function unlockCase(id) {
 async function saveSettings(event) {
   event.preventDefault();
   try {
+    const accounts = readPaymentAccountsEditor();
+    if (!accounts.length) {
+      toast("Agrega al menos una cuenta de pago.");
+      return;
+    }
     const payload = await api("/api/settings/save", {
       method: "POST",
       body: JSON.stringify({
@@ -422,13 +455,65 @@ async function saveSettings(event) {
         account_number: $("#setAccount").value,
         rif: $("#setRif").value,
         instructions: $("#setInstructions").value,
+        payment_accounts: accounts,
       }),
     });
     state.settings = payload.settings;
+    hydrateSettings();
     toast("Datos bancarios guardados.");
   } catch (error) {
     toast(error.message);
   }
+}
+
+function blankPaymentAccount(type = "Pago movil") {
+  return {
+    type,
+    bank_name: "",
+    account_holder: "",
+    account_number: "",
+    rif: "",
+    phone: "",
+    document: "",
+    instructions: "",
+  };
+}
+
+function renderPaymentAccountsEditor() {
+  const accounts = paymentAccounts();
+  $("#paymentAccountsEditor").innerHTML = accounts.map((account, index) => `
+    <article class="payment-account-editor" data-account-index="${index}">
+      <div class="section-head compact">
+        <h3>${escapeHtml(account.type || `Cuenta ${index + 1}`)}</h3>
+        <button class="secondary" type="button" data-remove-payment-account="${index}">Eliminar</button>
+      </div>
+      <div class="form-grid">
+        <label>Tipo de pago
+          <select data-account-field="type" required>
+            <option value="Pago movil" ${account.type === "Pago movil" ? "selected" : ""}>Pago movil</option>
+            <option value="Transferencia a cuenta indicada" ${account.type === "Transferencia a cuenta indicada" ? "selected" : ""}>Transferencia a cuenta indicada</option>
+          </select>
+        </label>
+        <label>Banco<input data-account-field="bank_name" value="${escapeHtml(account.bank_name || "")}" required /></label>
+        <label>Titular<input data-account-field="account_holder" value="${escapeHtml(account.account_holder || "")}" required /></label>
+        <label>Numero de cuenta<input data-account-field="account_number" value="${escapeHtml(account.account_number || "")}" /></label>
+        <label>RIF<input data-account-field="rif" value="${escapeHtml(account.rif || "")}" /></label>
+        <label>Telefono pago movil<input data-account-field="phone" value="${escapeHtml(account.phone || "")}" placeholder="4141234567" /></label>
+        <label>Documento pago movil<input data-account-field="document" value="${escapeHtml(account.document || "")}" placeholder="J-00000000-0" /></label>
+        <label class="span-2">Instrucciones<textarea data-account-field="instructions" rows="3">${escapeHtml(account.instructions || "")}</textarea></label>
+      </div>
+    </article>
+  `).join("");
+}
+
+function readPaymentAccountsEditor() {
+  return Array.from(document.querySelectorAll(".payment-account-editor")).map((card) => {
+    const account = {};
+    card.querySelectorAll("[data-account-field]").forEach((field) => {
+      account[field.dataset.accountField] = field.value.trim();
+    });
+    return account;
+  }).filter((account) => account.type && account.bank_name && account.account_holder);
 }
 
 function renderUsers() {
@@ -526,6 +611,20 @@ function bindEvents() {
   $$("[data-close-modal]").forEach((node) => node.addEventListener("click", () => $("#caseModal").classList.add("hidden")));
   $$("[data-close-user]").forEach((node) => node.addEventListener("click", () => $("#userModal").classList.add("hidden")));
   $("#settingsForm").addEventListener("submit", saveSettings);
+  $("#addPaymentAccountBtn").addEventListener("click", () => {
+    const accounts = readPaymentAccountsEditor();
+    accounts.push(blankPaymentAccount(accounts.some((account) => account.type === "Pago movil") ? "Transferencia a cuenta indicada" : "Pago movil"));
+    state.settings.payment_accounts = accounts;
+    renderPaymentAccountsEditor();
+  });
+  $("#paymentAccountsEditor").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-payment-account]");
+    if (!button) return;
+    const removeIndex = Number(button.dataset.removePaymentAccount);
+    const accounts = readPaymentAccountsEditor().filter((_, index) => index !== removeIndex);
+    state.settings.payment_accounts = accounts.length ? accounts : [blankPaymentAccount()];
+    renderPaymentAccountsEditor();
+  });
   $("#newUserBtn").addEventListener("click", () => openUser());
   $("#usersTable").addEventListener("click", (event) => {
     const button = event.target.closest("[data-edit-user]");

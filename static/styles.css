@@ -289,6 +289,53 @@ a {
   margin: 0;
 }
 
+.payment-account-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.payment-account-card,
+.payment-account-editor {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.payment-account-card {
+  border-color: #f0d978;
+  background: #fffdf1;
+}
+
+.account-type {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: var(--yellow);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.payment-account-card p {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.payment-accounts-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.section-head.compact h3 {
+  font-size: 18px;
+}
+
 .bank-box dl div,
 .status-strip {
   display: flex;
@@ -743,7 +790,8 @@ a {
 
   .metrics,
   .form-grid,
-  .detail-grid {
+  .detail-grid,
+  .payment-account-cards {
     grid-template-columns: 1fr;
   }
 
