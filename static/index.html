@@ -289,7 +289,12 @@
           <h2>Comprobante</h2>
           <button class="icon-btn" type="button" data-close-receipt>×</button>
         </div>
-        <img id="receiptPreviewImage" class="receipt-preview" alt="Comprobante de pago" />
+        <img id="receiptPreviewImage" class="receipt-preview hidden" alt="Comprobante de pago" />
+        <iframe id="receiptPreviewFrame" class="receipt-preview hidden" title="Comprobante de pago"></iframe>
+        <div id="receiptPreviewFallback" class="receipt-fallback hidden">
+          <p>No se pudo previsualizar este comprobante.</p>
+          <a id="receiptPreviewLink" target="_blank" rel="noopener">Abrir comprobante</a>
+        </div>
       </div>
     </div>
 

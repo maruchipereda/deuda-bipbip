@@ -563,7 +563,25 @@ async function deleteLastPayment(id) {
 }
 
 function openReceiptPreview(url) {
-  $("#receiptPreviewImage").src = authenticatedUrl(url);
+  const signedUrl = authenticatedUrl(url);
+  const cleanUrl = url.split("?")[0].toLowerCase();
+  const image = $("#receiptPreviewImage");
+  const frame = $("#receiptPreviewFrame");
+  const fallback = $("#receiptPreviewFallback");
+  const link = $("#receiptPreviewLink");
+  image.classList.add("hidden");
+  frame.classList.add("hidden");
+  fallback.classList.add("hidden");
+  image.src = "";
+  frame.src = "";
+  link.href = signedUrl;
+  if (cleanUrl.endsWith(".pdf")) {
+    frame.src = signedUrl;
+    frame.classList.remove("hidden");
+  } else {
+    image.src = signedUrl;
+    image.classList.remove("hidden");
+  }
   $("#receiptModal").classList.remove("hidden");
 }
 
@@ -789,8 +807,13 @@ function bindEvents() {
   $$("[data-close-receipt]").forEach((node) => node.addEventListener("click", () => {
     $("#receiptModal").classList.add("hidden");
     $("#receiptPreviewImage").src = "";
+    $("#receiptPreviewFrame").src = "";
   }));
   $("#settingsForm").addEventListener("submit", saveSettings);
+  $("#receiptPreviewImage").addEventListener("error", () => {
+    $("#receiptPreviewImage").classList.add("hidden");
+    $("#receiptPreviewFallback").classList.remove("hidden");
+  });
   $("#addPaymentAccountBtn").addEventListener("click", () => {
     const accounts = readPaymentAccountsEditor();
     accounts.push(blankPaymentAccount(accounts.some((account) => account.type === "Pago movil") ? "Transferencia a cuenta indicada" : "Pago movil"));

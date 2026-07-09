@@ -861,10 +861,20 @@ a {
 .receipt-preview {
   display: block;
   width: 100%;
+  min-height: 420px;
   max-height: 72vh;
   object-fit: contain;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: #f7f7f2;
+}
+
+.receipt-fallback {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
   background: #f7f7f2;
 }
 
