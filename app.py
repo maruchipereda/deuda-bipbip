@@ -52,6 +52,23 @@ BUCKETS = {
     "desbloqueo": ["conciliado", "desbloqueado"],
 }
 
+CONCILIATED_HEADERS = [
+    "nombre",
+    "cedula",
+    "telefono",
+    "placa",
+    "driver_id",
+    "monto_conciliado",
+    "referencia_validada",
+    "fecha_conciliacion",
+    "agente_conciliacion",
+    "estado_conciliacion",
+    "conciliado",
+    "estado_desbloqueo",
+    "fecha_desbloqueo",
+    "observaciones",
+]
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -332,6 +349,9 @@ def public_driver(row, include_events=False):
     data["debt_usd"] = money(data.get("debt_usd"))
     data["debt_ves"] = money(data.get("debt_ves"))
     data["rate"] = money(data.get("rate"))
+    data["successful_call_count"] = int(data.get("successful_call_count") or 0)
+    data["missed_call_count"] = int(data.get("missed_call_count") or 0)
+    data["followup_count"] = int(data.get("followup_count") or 0)
     data["status_label"] = CASE_STATUSES.get(data.get("status"), data.get("status"))
     if data.get("payment_json"):
         try:
@@ -382,13 +402,28 @@ def driver_with_latest_payment(con, where="", params=None):
                        'validated_reference', payments.validated_reference,
                        'validated_at', payments.validated_at,
                        'validator_name', validator.name
-                   )
+                       )
                    from payments
                    left join users validator on validator.id = payments.validated_by
                    where payments.driver_id = drivers.id
                    order by payments.created_at desc
                    limit 1
-               ) as payment_json
+               ) as payment_json,
+               (
+                   select count(*)
+                   from audit_events
+                   where audit_events.driver_id = drivers.id and audit_events.event_type = 'llamada_exitosa'
+               ) as successful_call_count,
+               (
+                   select count(*)
+                   from audit_events
+                   where audit_events.driver_id = drivers.id and audit_events.event_type = 'llamada_perdida'
+               ) as missed_call_count,
+               (
+                   select count(*)
+                   from audit_events
+                   where audit_events.driver_id = drivers.id and audit_events.event_type in ('nota_seguimiento', 'llamada_exitosa', 'llamada_perdida')
+               ) as followup_count
         from drivers
         {where}
         order by drivers.updated_at desc
@@ -597,6 +632,7 @@ def append_conciliated_to_sheets(driver, payment, user):
     service = google_service()
     if not service:
         return {"ok": False, "error": "Google Sheets no configurado"}
+    ensure_conciliated_sheet_headers(service)
     updated = update_conciliated_status_in_sheets(driver, payment, user, "conciliado", service=service)
     if updated.get("ok") and updated.get("updated"):
         return updated
@@ -610,19 +646,29 @@ def append_conciliated_to_sheets(driver, payment, user):
         payment.get("validated_reference") or payment.get("reference") or "",
         payment.get("validated_at") or now_iso(),
         payment.get("reconciliation_agent") or user.get("name") or "",
-        driver.get("status") or "",
+        CASE_STATUSES.get(driver.get("status"), driver.get("status") or ""),
+        "Si",
         "pendiente",
         "",
-        json.dumps(driver, ensure_ascii=False),
+        payment.get("observations") or "",
     ]
     service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
-        range=f"{CONCILIATED_SHEET_NAME}!A:M",
+        range=f"{CONCILIATED_SHEET_NAME}!A:N",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": [row]},
     ).execute()
     return {"ok": True}
+
+
+def ensure_conciliated_sheet_headers(service):
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range=f"{CONCILIATED_SHEET_NAME}!A1:N1",
+        valueInputOption="USER_ENTERED",
+        body={"values": [CONCILIATED_HEADERS]},
+    ).execute()
 
 
 def column_letter(index):
@@ -647,6 +693,7 @@ def update_conciliated_status_in_sheets(driver, payment, user, status, service=N
     service = service or google_service()
     if not service:
         return {"ok": False, "error": "Google Sheets no configurado"}
+    ensure_conciliated_sheet_headers(service)
     values_api = service.spreadsheets().values()
     rows = values_api.get(spreadsheetId=SHEET_ID, range=f"{CONCILIATED_SHEET_NAME}!A1:Z5000").execute().get("values", [])
     if not rows:
@@ -1108,6 +1155,31 @@ class Handler(BaseHTTPRequestHandler):
                         ).lastrowid
                     row = con.execute("select * from users where id = ?", (user_id,)).fetchone()
                 return send_json(self, {"user": public_user(row)})
+
+            if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/followup"):
+                driver_id = int(parsed.path.split("/")[3])
+                followup_type = clean_text(body.get("type"))
+                notes = clean_text(body.get("notes"))
+                allowed = {
+                    "nota": "nota_seguimiento",
+                    "llamada_exitosa": "llamada_exitosa",
+                    "llamada_perdida": "llamada_perdida",
+                }
+                event_type = allowed.get(followup_type)
+                if not event_type:
+                    return send_json(self, {"error": "Tipo de seguimiento invalido"}, 400)
+                if not notes:
+                    notes = {
+                        "nota_seguimiento": "Nota agregada",
+                        "llamada_exitosa": "Llamada exitosa registrada",
+                        "llamada_perdida": "Llamada perdida registrada",
+                    }[event_type]
+                with db() as con:
+                    driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
+                    if not driver:
+                        return send_json(self, {"error": "Caso no encontrado"}, 404)
+                    add_event(con, driver_id, user["id"], event_type, notes)
+                return send_json(self, {"ok": True})
 
             if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/status"):
                 if not can_conciliate(user):

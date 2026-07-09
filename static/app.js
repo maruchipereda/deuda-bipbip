@@ -321,6 +321,10 @@ function caseRow(item) {
       <div>
         <strong>${escapeHtml(payment.reference || "-")}</strong>
         <small>${payment.amount_ves ? money(payment.amount_ves, "VES") : "sin reporte"} ${alerts.length ? `· ${alerts.length} alerta(s)` : ""}</small>
+        <div class="call-pills">
+          <span class="call-pill success">Exitosas ${Number(item.successful_call_count || 0)}</span>
+          <span class="call-pill missed">Perdidas ${Number(item.missed_call_count || 0)}</span>
+        </div>
       </div>
       <div><span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status_label || item.status)}</span></div>
       <button class="icon-action" type="button" data-open-case="${item.id}" title="Abrir detalle"><svg><use href="#i-eye"></use></svg></button>
@@ -364,6 +368,22 @@ function renderCaseDetail(item) {
         ${alerts.length ? `<div class="alert-list">${alerts.map((alert) => `<span>${labelAlert(alert)}</span>`).join("")}</div>` : ""}
         ${payment.attachment_url ? `<button class="file-link" type="button" data-preview-receipt="${escapeHtml(payment.attachment_url)}">Ver comprobante</button>` : ""}
       ` : `<p class="notes">El conductor aun no ha reportado pago.</p>`}
+    </section>
+    <section class="detail-block followup-block">
+      <h3>Seguimiento</h3>
+      <div class="call-pills">
+        <span class="call-pill success">Llamadas exitosas ${Number(item.successful_call_count || 0)}</span>
+        <span class="call-pill missed">Llamadas perdidas ${Number(item.missed_call_count || 0)}</span>
+        <span class="call-pill neutral">Notas ${Number(item.followup_count || 0)}</span>
+      </div>
+      <label>Nota de contacto
+        <textarea id="followupNotes" rows="3" placeholder="Ej. Se llamo al conductor, indico que pagara hoy en la tarde."></textarea>
+      </label>
+      <div class="action-row">
+        <button type="button" data-followup-action="llamada_exitosa" data-followup-case="${item.id}">Llamada exitosa</button>
+        <button class="secondary" type="button" data-followup-action="llamada_perdida" data-followup-case="${item.id}">Llamada perdida</button>
+        <button class="secondary" type="button" data-followup-action="nota" data-followup-case="${item.id}">Guardar nota</button>
+      </div>
     </section>
     ${canConciliate && payment.id ? `
       <form class="detail-block action-form" data-status-form="${item.id}">
@@ -460,6 +480,25 @@ async function deleteCase(id) {
 function openReceiptPreview(url) {
   $("#receiptPreviewImage").src = authenticatedUrl(url);
   $("#receiptModal").classList.remove("hidden");
+}
+
+async function addFollowup(id, type) {
+  const notes = $("#followupNotes")?.value.trim() || "";
+  if (type === "nota" && !notes) {
+    toast("Escribe una nota para guardarla.");
+    return;
+  }
+  try {
+    await api(`/api/cases/${id}/followup`, {
+      method: "POST",
+      body: JSON.stringify({ type, notes }),
+    });
+    toast("Seguimiento guardado.");
+    await openCase(id);
+    await loadCases();
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function unlockCase(id) {
@@ -641,6 +680,8 @@ function bindEvents() {
     if (previewButton) openReceiptPreview(previewButton.dataset.previewReceipt);
     const statusButton = event.target.closest("[data-status-action]");
     if (statusButton) updateCaseStatus(statusButton.closest("form"), statusButton.dataset.statusAction);
+    const followupButton = event.target.closest("[data-followup-action]");
+    if (followupButton) addFollowup(followupButton.dataset.followupCase, followupButton.dataset.followupAction);
     const unlockButton = event.target.closest("[data-unlock-case]");
     if (unlockButton) unlockCase(unlockButton.dataset.unlockCase);
     const deleteButton = event.target.closest("[data-delete-case]");
