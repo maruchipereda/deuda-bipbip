@@ -37,6 +37,7 @@ CASE_STATUSES = {
     "pendiente_pago": "Pendiente de pago",
     "pago_reportado": "Pago reportado",
     "en_validacion": "En validacion",
+    "pago_parcial": "Pago parcial",
     "conciliado": "Conciliado",
     "rechazado": "Rechazado",
     "duplicado": "Duplicado / conflicto",
@@ -48,12 +49,14 @@ CASE_STATUSES = {
 BUCKETS = {
     "pendientes": ["pendiente_pago"],
     "reportados": ["pago_reportado"],
-    "validacion": ["en_validacion", "revision_manual"],
+    "validacion": ["en_validacion"],
     "conciliados": ["conciliado"],
     "rechazados": ["rechazado"],
     "duplicados": ["duplicado", "fraudulento"],
     "desbloqueo": ["conciliado", "desbloqueado"],
 }
+
+PAID_PAYMENT_STATUSES = ("pago_parcial", "conciliado")
 
 CONCILIATED_HEADERS = [
     "nombre",
@@ -368,9 +371,18 @@ def public_driver(row, include_events=False):
     data = row_to_dict(row)
     if not data:
         return None
+    paid_ves = money(data.get("paid_ves"))
+    pending_ves = max(0.0, money(data.get("debt_ves")) - paid_ves)
+    rate = money(data.get("rate"))
+    paid_usd = paid_ves / rate if rate else 0.0
+    pending_usd = max(0.0, money(data.get("debt_usd")) - paid_usd)
     data["debt_usd"] = money(data.get("debt_usd"))
     data["debt_ves"] = money(data.get("debt_ves"))
-    data["rate"] = money(data.get("rate"))
+    data["rate"] = rate
+    data["paid_ves"] = paid_ves
+    data["paid_usd"] = paid_usd
+    data["pending_ves"] = pending_ves
+    data["pending_usd"] = pending_usd
     data["successful_call_count"] = int(data.get("successful_call_count") or 0)
     data["missed_call_count"] = int(data.get("missed_call_count") or 0)
     data["followup_count"] = int(data.get("followup_count") or 0)
@@ -445,7 +457,12 @@ def driver_with_latest_payment(con, where="", params=None):
                    select count(*)
                    from audit_events
                    where audit_events.driver_id = drivers.id and audit_events.event_type in ('nota_seguimiento', 'llamada_exitosa', 'llamada_perdida')
-               ) as followup_count
+               ) as followup_count,
+               coalesce((
+                   select sum(payments.amount_ves)
+                   from payments
+                   where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
+               ), 0) as paid_ves
         from drivers
         {where}
         order by drivers.updated_at desc
@@ -477,16 +494,71 @@ def list_cases(user, query):
     return [public_driver(row) for row in rows]
 
 
+def summary_by_status(user):
+    statuses = None
+    if user["role"] == "operaciones":
+        statuses = ["conciliado", "desbloqueado"]
+    params = []
+    where = ""
+    if statuses:
+        where = "where drivers.status in ({})".format(",".join("?" for _ in statuses))
+        params.extend(statuses)
+    with db() as con:
+        rows = con.execute(
+            f"""
+            select drivers.status,
+                   count(*) as case_count,
+                   coalesce(sum(drivers.debt_usd), 0) as debt_usd,
+                   coalesce(sum(
+                       case
+                           when drivers.rate > 0 then paid.paid_ves / drivers.rate
+                           else 0
+                       end
+                   ), 0) as paid_usd
+            from drivers
+            left join (
+                select driver_id, sum(amount_ves) as paid_ves
+                from payments
+                where status in ('pago_parcial', 'conciliado')
+                group by driver_id
+            ) paid on paid.driver_id = drivers.id
+            {where}
+            group by drivers.status
+            order by drivers.status
+            """,
+            params,
+        ).fetchall()
+    summary = []
+    totals = {"case_count": 0, "debt_usd": 0.0, "paid_usd": 0.0, "pending_usd": 0.0}
+    for row in rows:
+        debt_usd = money(row["debt_usd"])
+        paid_usd = money(row["paid_usd"])
+        pending_usd = max(0.0, debt_usd - paid_usd)
+        item = {
+            "status": row["status"],
+            "status_label": CASE_STATUSES.get(row["status"], row["status"]),
+            "case_count": int(row["case_count"] or 0),
+            "debt_usd": debt_usd,
+            "paid_usd": paid_usd,
+            "pending_usd": pending_usd,
+        }
+        summary.append(item)
+        totals["case_count"] += item["case_count"]
+        totals["debt_usd"] += debt_usd
+        totals["paid_usd"] += paid_usd
+        totals["pending_usd"] += pending_usd
+    return {"rows": summary, "totals": totals}
+
+
 def find_driver(con, cedula, phone):
     cedula_norm = normalize_digits(cedula)
     phones = sorted(phone_variants(phone))
     if not cedula_norm or not phones:
         return None
     placeholders = ",".join("?" for _ in phones)
-    return con.execute(
+    return driver_with_latest_payment(
+        con,
         f"""
-        select *
-        from drivers
         where cedula_norm = ? and phone_norm in ({placeholders})
         """,
         [cedula_norm, *phones],
@@ -546,8 +618,12 @@ def upsert_driver(con, payload, source="manual"):
 def evaluate_payment(con, driver, body):
     reference = normalize_reference(body.get("reference"))
     amount = money(body.get("amount_ves"))
-    expected = money(driver["debt_ves"])
-    phone_ok = normalize_digits(body.get("payment_phone")) == driver["phone_norm"]
+    paid = con.execute(
+        "select coalesce(sum(amount_ves), 0) as paid from payments where driver_id = ? and status in ('pago_parcial', 'conciliado')",
+        (driver["id"],),
+    ).fetchone()["paid"]
+    expected = max(0.0, money(driver["debt_ves"]) - money(paid))
+    phone_ok = driver["phone_norm"] in phone_variants(body.get("payment_phone"))
     amount_ok = abs(amount - expected) <= max(1.0, expected * 0.01)
     duplicate = con.execute(
         "select payments.id, drivers.cedula, drivers.phone from payments join drivers on drivers.id = payments.driver_id where payments.reference_norm = ?",
@@ -1078,6 +1154,8 @@ class Handler(BaseHTTPRequestHandler):
                 users = [public_user(row) for row in con.execute("select * from users order by role, name")]
                 settings = get_settings(con)
             return send_json(self, {"user": user, "users": users, "settings": settings, "statuses": CASE_STATUSES})
+        if parsed.path == "/api/summary":
+            return send_json(self, summary_by_status(user))
         if parsed.path == "/api/cases":
             return send_json(self, {"cases": list_cases(user, parse_qs(parsed.query))})
         if parsed.path.startswith("/api/cases/"):

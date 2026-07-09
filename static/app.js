@@ -4,6 +4,7 @@ const state = {
   users: [],
   settings: {},
   cases: [],
+  summary: null,
   currentBucket: "pendientes",
   currentView: "cases",
   statusFilter: "",
@@ -172,11 +173,15 @@ function renderDebt() {
   $("#debtVes").textContent = money(driver.debt_ves, "VES");
   $("#debtUsd").textContent = money(driver.debt_usd, "USD");
   $("#debtRate").textContent = `Tasa: ${Number(driver.rate || 0).toLocaleString("es-VE", { minimumFractionDigits: 2 })}`;
+  $("#paidVes").textContent = money(driver.paid_ves, "VES");
+  $("#paidUsd").textContent = money(driver.paid_usd, "USD");
+  $("#pendingVes").textContent = money(driver.pending_ves, "VES");
+  $("#pendingUsd").textContent = money(driver.pending_usd, "USD");
   $("#caseStatus").textContent = driver.status_label || driver.status;
   $("#payCedula").value = driver.cedula || "";
   $("#payPhone").value = state.lookupPhone || driver.phone || "";
   $("#payPlate").value = driver.plate || "";
-  $("#payAmount").value = Number(driver.debt_ves || 0).toFixed(2);
+  $("#payAmount").value = Number(driver.pending_ves || driver.debt_ves || 0).toFixed(2);
   $("#payDate").value = new Date().toISOString().slice(0, 10);
 }
 
@@ -268,7 +273,8 @@ function setAdminView(view) {
   $$(".nav-btn").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   $$(".admin-view").forEach((node) => node.classList.remove("active"));
   $(`#${view}View`).classList.add("active");
-  $("#adminTitle").textContent = view === "settings" ? "Cuenta bancaria" : "Usuarios";
+  $("#adminTitle").textContent = view === "settings" ? "Cuenta bancaria" : view === "summary" ? "Resumen" : "Usuarios";
+  if (view === "summary") loadSummary();
 }
 
 async function loadCases() {
@@ -309,6 +315,41 @@ function renderCases() {
       <span>Conductor</span><span>Deuda</span><span>Pago</span><span>Estado</span><span></span>
     </div>
     ${cases.map(caseRow).join("")}
+  `;
+}
+
+async function loadSummary() {
+  const payload = await api("/api/summary");
+  state.summary = payload;
+  renderSummary();
+}
+
+function renderSummary() {
+  const summary = state.summary || { rows: [], totals: {} };
+  const totals = summary.totals || {};
+  $("#summaryMetrics").innerHTML = [
+    ["Casos", totals.case_count || 0],
+    ["Deuda USD", money(totals.debt_usd, "USD")],
+    ["Abonado USD", money(totals.paid_usd, "USD")],
+    ["Pendiente USD", money(totals.pending_usd, "USD")],
+  ].map(([label, value]) => `<div><strong>${escapeHtml(value)}</strong><span>${label}</span></div>`).join("");
+  if (!summary.rows.length) {
+    $("#summaryTable").innerHTML = `<div class="empty">No hay casos para resumir.</div>`;
+    return;
+  }
+  $("#summaryTable").innerHTML = `
+    <div class="summary-head">
+      <span>Status</span><span>Casos</span><span>Deuda USD</span><span>Abonado USD</span><span>Pendiente USD</span>
+    </div>
+    ${summary.rows.map((row) => `
+      <article class="summary-row">
+        <span><span class="status ${escapeHtml(row.status)}">${escapeHtml(row.status_label || row.status)}</span></span>
+        <strong>${Number(row.case_count || 0)}</strong>
+        <strong>${money(row.debt_usd, "USD")}</strong>
+        <strong>${money(row.paid_usd, "USD")}</strong>
+        <strong>${money(row.pending_usd, "USD")}</strong>
+      </article>
+    `).join("")}
   `;
 }
 
@@ -355,8 +396,8 @@ function renderCaseDetail(item) {
   const canDelete = state.user.role === "master";
   const statusOptions = [
     ["en_validacion", "En validacion"],
+    ["pago_parcial", "Pago parcial"],
     ["conciliado", "Conciliado"],
-    ["revision_manual", "Revision manual"],
     ["rechazado", "Rechazado"],
     ["fraudulento", "Fraude"],
     ["duplicado", "Duplicado"],
@@ -369,6 +410,8 @@ function renderCaseDetail(item) {
       <div><span>Placa</span><strong>${escapeHtml(item.plate || "-")}</strong></div>
       <div><span>Driver ID</span><strong>${escapeHtml(item.driver_external_id || "-")}</strong></div>
       <div><span>Deuda</span><strong>${money(item.debt_ves, "VES")}</strong></div>
+      <div><span>Abonado</span><strong>${money(item.paid_ves, "VES")}</strong></div>
+      <div><span>Pendiente</span><strong>${money(item.pending_ves, "VES")}</strong></div>
     </section>
     <section class="detail-block">
       <h3>Pago reportado</h3>
@@ -684,7 +727,7 @@ function bindEvents() {
   $("#adminNav").addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    if (button.dataset.bucket) setBucket(button.dataset.bucket);
+    if (button.hasAttribute("data-bucket")) setBucket(button.dataset.bucket);
     if (button.dataset.view) setAdminView(button.dataset.view);
   });
   $("#caseSearch").addEventListener("input", () => {

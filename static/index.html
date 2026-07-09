@@ -43,13 +43,17 @@
 
         <section id="debtPanel" class="debt-panel hidden">
           <div class="amount-card">
-            <span>Monto exacto a pagar</span>
+            <span>Monto total de deuda</span>
             <strong id="debtVes">Bs 0,00</strong>
             <small id="debtUsd">USD 0,00</small>
             <small id="debtRate">Tasa: 0,00</small>
+            <div class="amount-breakdown">
+              <div><span>Monto abonado</span><strong id="paidVes">Bs 0,00</strong><small id="paidUsd">USD 0,00</small></div>
+              <div><span>Monto pendiente</span><strong id="pendingVes">Bs 0,00</strong><small id="pendingUsd">USD 0,00</small></div>
+            </div>
           </div>
 
-          <div class="warning strong">Debes pagar exactamente el monto indicado y reportarlo aqui para poder ser desbloqueado.</div>
+          <div class="warning strong">Puedes pagar el monto pendiente completo o reportar un abono parcial. No seras desbloqueado hasta completar y validar el pago.</div>
           <div class="warning">Por favor paga a la cuenta bancaria indicada para evitar errores de conciliacion.</div>
           <div class="warning danger">No recargues el dinero en tu billetera. Debes pagar a esta cuenta especifica para evitar el cobro del IVA correspondiente a recargas de comision.</div>
 
@@ -68,7 +72,7 @@
             <h2>Reportar pago</h2>
             <div class="form-grid">
               <label>Cedula
-                <input id="payCedula" required readonly />
+                <input id="payCedula" required />
               </label>
               <label>Telefono desde el que pagaste
                 <input id="payPhone" autocomplete="tel" inputmode="tel" placeholder="4141234567" required />
@@ -159,7 +163,9 @@
           <div><strong>Deudas</strong><small id="sessionLabel"></small></div>
         </div>
         <nav id="adminNav">
+          <button class="nav-btn" data-bucket="" type="button">Todos</button>
           <button class="nav-btn active" data-bucket="pendientes" type="button">Pendientes</button>
+          <button class="nav-btn" data-view="summary" type="button">Resumen</button>
           <button class="nav-btn" data-bucket="reportados" type="button">Pagos reportados</button>
           <button class="nav-btn" data-bucket="validacion" type="button">En validacion</button>
           <button class="nav-btn" data-bucket="conciliados" type="button">Conciliados</button>
@@ -194,8 +200,8 @@
                 <option value="pendiente_pago">Pendiente de pago</option>
                 <option value="pago_reportado">Pago reportado</option>
                 <option value="en_validacion">En validacion</option>
+                <option value="pago_parcial">Pago parcial</option>
                 <option value="conciliado">Conciliado</option>
-                <option value="revision_manual">Revision manual</option>
                 <option value="rechazado">Rechazado</option>
                 <option value="duplicado">Duplicado</option>
                 <option value="fraudulento">Fraude</option>
@@ -204,6 +210,11 @@
             </label>
           </div>
           <div id="caseTable" class="case-table"></div>
+        </section>
+
+        <section id="summaryView" class="admin-view">
+          <div id="summaryMetrics" class="metrics"></div>
+          <div id="summaryTable" class="summary-table"></div>
         </section>
 
         <section id="settingsView" class="admin-view">
