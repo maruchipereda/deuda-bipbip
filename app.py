@@ -101,6 +101,22 @@ def normalize_digits(value):
     return "".join(char for char in clean_text(value) if char.isdigit())
 
 
+def phone_variants(value):
+    digits = normalize_digits(value)
+    variants = {digits}
+    if digits.startswith("58") and len(digits) >= 12:
+        variants.add(digits[2:])
+    if digits.startswith("0") and len(digits) >= 11:
+        variants.add(digits[1:])
+    for item in list(variants):
+        if item and not item.startswith("0"):
+            variants.add(f"0{item}")
+        if len(item) == 10 and item.startswith("4"):
+            variants.add(f"58{item}")
+            variants.add(f"0{item}")
+    return {item for item in variants if item}
+
+
 def normalize_reference(value):
     return "".join(char for char in clean_text(value).upper() if char.isalnum())
 
@@ -462,16 +478,17 @@ def list_cases(user, query):
 
 def find_driver(con, cedula, phone):
     cedula_norm = normalize_digits(cedula)
-    phone_norm = normalize_digits(phone)
-    if not cedula_norm or not phone_norm:
+    phones = sorted(phone_variants(phone))
+    if not cedula_norm or not phones:
         return None
+    placeholders = ",".join("?" for _ in phones)
     return con.execute(
-        """
+        f"""
         select *
         from drivers
-        where cedula_norm = ? and phone_norm = ?
+        where cedula_norm = ? and phone_norm in ({placeholders})
         """,
-        (cedula_norm, phone_norm),
+        [cedula_norm, *phones],
     ).fetchone()
 
 
@@ -1045,7 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                 if row:
                     add_event(con, row["id"], None, "consulta_conductor", "Consulta publica de deuda")
             if not row:
-                return send_json(self, {"error": "No encontramos una deuda con esa cedula y telefono. Revisa los datos o contacta soporte."}, 404)
+                return send_json(self, {"error": "No encontramos una deuda con esa cedula y telefono. Usa cedula tipo V12345678 y telefono tipo 4141234567, o contacta soporte."}, 404)
             return send_json(self, {"driver": public_driver(row), "settings": settings})
 
         user = require_user(self)
