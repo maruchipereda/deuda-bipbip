@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -25,6 +26,7 @@ SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", DEFAULT_SHEET_ID)
 DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
+SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
 AUTH_TOKENS = {}
 DB_LOCK = threading.Lock()
 
@@ -85,14 +87,25 @@ def parse_money(value):
     raw = clean_text(value)
     if not raw:
         return 0.0
-    raw = raw.replace("Bs.", "").replace("VES", "").replace("USD", "").replace("$", "")
-    raw = raw.replace(" ", "")
-    if "," in raw and "." in raw:
-        raw = raw.replace(".", "").replace(",", ".")
+    negative = "-" in raw or ("(" in raw and ")" in raw)
+    raw = re.sub(r"[^\d,.\-]", "", raw).replace("-", "")
+    if not raw:
+        return 0.0
+    last_dot = raw.rfind(".")
+    last_comma = raw.rfind(",")
+    last_sep = max(last_dot, last_comma)
+    if last_sep >= 0:
+        integer = re.sub(r"[^\d]", "", raw[:last_sep])
+        decimal = re.sub(r"[^\d]", "", raw[last_sep + 1:])
+        if decimal:
+            raw = f"{integer or '0'}.{decimal}"
+        else:
+            raw = integer or "0"
     else:
-        raw = raw.replace(",", ".")
+        raw = re.sub(r"[^\d]", "", raw)
     try:
-        return round(float(raw), 2)
+        amount = round(float(raw), 2)
+        return -amount if negative else amount
     except ValueError:
         return 0.0
 
@@ -242,6 +255,7 @@ def get_settings(con):
         "instructions": "Paga exactamente el monto indicado, guarda el comprobante y reportalo aqui. No recargues tu billetera.",
         "sync_status": "Sin sincronizacion todavia",
         "debt_sync_local_date": "",
+        "debt_sync_version": "",
     }
     defaults.update(data)
     return defaults
@@ -506,7 +520,7 @@ def sync_debts_from_sheets(force=False):
     if not force:
         with db() as con:
             settings = get_settings(con)
-            if settings.get("debt_sync_local_date") == today:
+            if settings.get("debt_sync_local_date") == today and settings.get("debt_sync_version") == SYNC_VERSION:
                 return {"ok": True, "skipped": True, "date": today}
     service = google_service()
     if not service:
@@ -518,11 +532,11 @@ def sync_debts_from_sheets(force=False):
     rate_values = value_api.get(spreadsheetId=SHEET_ID, range=f"{DEBT_SHEET_NAME}!H2").execute().get("values", [])
     sheet_rate = parse_money(rate_values[0][0]) if rate_values and rate_values[0] else 0.0
     headers = values[0]
-    idx_name = header_index(headers, ["nombre", "driver"], 2)
-    idx_cedula = header_index(headers, ["cedula", "cédula"], 0)
-    idx_phone = header_index(headers, ["telefono", "teléfono", "phone"], 1)
-    idx_usd = header_index(headers, ["deuda usd", "usd"], 3)
-    idx_ves = header_index(headers, ["deuda ves", "ves", "bolivar"], 4)
+    idx_name = header_index(headers, ["nombre", "driver"], 0)
+    idx_phone = 1
+    idx_cedula = 2
+    idx_usd = 3
+    idx_ves = 4
     idx_plate = header_index(headers, ["placa"], 5)
     idx_driver = header_index(headers, ["driver id", "rider id", "id"], 6)
     imported = 0
@@ -555,6 +569,7 @@ def sync_debts_from_sheets(force=False):
                 imported += 1
             set_setting(con, "sync_status", f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()}")
             set_setting(con, "debt_sync_local_date", today)
+            set_setting(con, "debt_sync_version", SYNC_VERSION)
     return {"ok": True, "imported": imported, "date": today}
 
 
@@ -717,14 +732,15 @@ def seed_data(con):
         "instructions": "Realiza una transferencia a esta cuenta por el monto exacto indicado. Guarda el comprobante y reportalo aqui. No recargues el dinero en tu billetera para evitar el cobro de IVA correspondiente a recargas de comision.",
         "sync_status": "Pendiente por configurar Google Sheets",
         "debt_sync_local_date": "",
+        "debt_sync_version": "",
     }
     for key, value in defaults.items():
         set_setting(con, key, value)
     samples = [
         {
             "name": "Conductor Demo",
-            "cedula": "12345678",
-            "phone": "04121234567",
+            "cedula": "V12345678",
+            "phone": "4141234567",
             "plate": "ABC123",
             "driver_external_id": "DRV-001",
             "debt_usd": 12.5,

@@ -54,14 +54,20 @@ La sincronizacion de deudas es diaria y liviana: despues de la medianoche en `SY
 La app detecta encabezados, pero usa este fallback si no los encuentra:
 
 ```txt
-A cedula
 B telefono
-C nombre
+C cedula
 D deuda_usd
 E deuda_ves
 F placa
 G driver_id
 H2 tasa del dia
+```
+
+Formato esperado en el portal:
+
+```txt
+Cedula: V12345678
+Telefono: 4141234567
 ```
 
 ## Salida Conciliados

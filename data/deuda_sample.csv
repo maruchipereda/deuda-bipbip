@@ -1,2 +1,2 @@
-cedula,telefono,nombre,deuda_usd,deuda_ves,placa,driver_id
-12345678,04121234567,Conductor Demo,12.50,456.25,ABC123,DRV-001
+nombre,telefono,cedula,deuda_usd,deuda_ves,placa,driver_id
+Conductor Demo,4141234567,V12345678,12.50,456.25,ABC123,DRV-001

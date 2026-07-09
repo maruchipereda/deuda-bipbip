@@ -32,10 +32,10 @@
           <h1>Consulta y reporta tu pago</h1>
           <form id="lookupForm" class="lookup-form">
             <label>Cedula
-              <input id="lookupCedula" autocomplete="off" inputmode="numeric" required />
+              <input id="lookupCedula" autocomplete="off" placeholder="V12345678" required />
             </label>
             <label>Telefono registrado
-              <input id="lookupPhone" autocomplete="tel" inputmode="tel" required />
+              <input id="lookupPhone" autocomplete="tel" inputmode="tel" placeholder="4141234567" required />
             </label>
             <button type="submit"><svg><use href="#i-search"></use></svg>Consultar deuda</button>
           </form>
@@ -76,7 +76,7 @@
                 <input id="payCedula" required readonly />
               </label>
               <label>Telefono desde el que pagaste
-                <input id="payPhone" autocomplete="tel" inputmode="tel" required />
+                <input id="payPhone" autocomplete="tel" inputmode="tel" placeholder="4141234567" required />
               </label>
               <label>Placa
                 <input id="payPlate" autocomplete="off" required />
