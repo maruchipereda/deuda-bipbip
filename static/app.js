@@ -368,7 +368,7 @@ function caseRow(item) {
       </div>
       <div>
         <strong>${money(item.debt_ves, "VES")}</strong>
-        <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.missing_after_reports_ves, "VES")}</small>
+        <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.missing_after_reports_usd, "USD")} / ${money(item.missing_after_reports_ves, "VES")}</small>
         ${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : ""}
       </div>
       <div>
@@ -414,9 +414,9 @@ function renderCaseDetail(item) {
       <div><span>Placa</span><strong>${escapeHtml(item.plate || "-")}</strong></div>
       <div><span>Driver ID</span><strong>${escapeHtml(item.driver_external_id || "-")}</strong></div>
       <div><span>Deuda</span><strong>${money(item.debt_ves, "VES")}</strong></div>
-      <div><span>Abonado conciliado</span><strong>${money(item.paid_ves, "VES")}</strong></div>
-      <div><span>Reportado por revisar</span><strong>${money(item.review_ves, "VES")}</strong></div>
-      <div><span>Falta por cubrir</span><strong>${money(item.missing_after_reports_ves, "VES")}</strong></div>
+      <div><span>Abonado conciliado</span><strong>${money(item.paid_usd, "USD")} / ${money(item.paid_ves, "VES")}</strong></div>
+      <div><span>Reportado por revisar</span><strong>${money(item.review_usd, "USD")} / ${money(item.review_ves, "VES")}</strong></div>
+      <div><span>Falta por cubrir</span><strong>${money(item.missing_after_reports_usd, "USD")} / ${money(item.missing_after_reports_ves, "VES")}</strong></div>
       <div><span>Senal</span><strong>${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : "Aun falta pago"}</strong></div>
     </section>
     <section class="detail-block">
@@ -425,6 +425,8 @@ function renderCaseDetail(item) {
         <div class="detail-grid">
           <div><span>Referencia</span><strong>${escapeHtml(payment.reference || "-")}</strong></div>
           <div><span>Monto</span><strong>${money(payment.amount_ves, "VES")}</strong></div>
+          <div><span>Equivalente USD</span><strong>${money(payment.amount_usd_at_payment, "USD")}</strong></div>
+          <div><span>Tasa del pago</span><strong>${Number(payment.rate_at_payment || 0).toLocaleString("es-VE", { minimumFractionDigits: 2 })}</strong></div>
           <div><span>Banco emisor</span><strong>${escapeHtml(payment.bank || "-")}</strong></div>
           <div><span>Telefono de pago</span><strong>${escapeHtml(payment.payment_phone || "-")}</strong></div>
           <div><span>Fecha de pago</span><strong>${escapeHtml(payment.payment_date || "-")}</strong></div>

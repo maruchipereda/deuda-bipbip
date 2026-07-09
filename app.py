@@ -112,6 +112,8 @@ PORTAL_PAYMENT_HEADERS = [
     "validated_at",
     "created_at",
     "updated_at",
+    "rate_at_payment",
+    "amount_usd_at_payment",
 ]
 TRANSIENT_SETTING_KEYS = {"sync_status", "debt_sync_local_date", "debt_sync_version"}
 
@@ -396,6 +398,8 @@ def public_payment(row):
     if not data:
         return None
     data["amount_ves"] = money(data.get("amount_ves"))
+    data["rate_at_payment"] = money(data.get("rate_at_payment"))
+    data["amount_usd_at_payment"] = money(data.get("amount_usd_at_payment"))
     try:
         data["alerts"] = json.loads(data.get("alerts_json") or "[]")
     except json.JSONDecodeError:
@@ -408,19 +412,20 @@ def public_driver(row, include_events=False):
     data = row_to_dict(row)
     if not data:
         return None
+    rate = money(data.get("rate"))
+    debt_usd = money(data.get("debt_usd"))
+    paid_usd = money(data.get("paid_usd"))
+    review_usd = money(data.get("review_usd"))
+    coverage_usd = paid_usd + review_usd
+    pending_usd = max(0.0, debt_usd - paid_usd)
+    missing_after_reports_usd = max(0.0, debt_usd - coverage_usd)
     paid_ves = money(data.get("paid_ves"))
     review_ves = money(data.get("review_ves"))
+    pending_ves = pending_usd * rate
+    missing_after_reports_ves = missing_after_reports_usd * rate
     coverage_ves = paid_ves + review_ves
-    pending_ves = max(0.0, money(data.get("debt_ves")) - paid_ves)
-    missing_after_reports_ves = max(0.0, money(data.get("debt_ves")) - coverage_ves)
-    rate = money(data.get("rate"))
-    paid_usd = paid_ves / rate if rate else 0.0
-    review_usd = review_ves / rate if rate else 0.0
-    coverage_usd = coverage_ves / rate if rate else 0.0
-    pending_usd = max(0.0, money(data.get("debt_usd")) - paid_usd)
-    missing_after_reports_usd = max(0.0, money(data.get("debt_usd")) - coverage_usd)
     data["debt_usd"] = money(data.get("debt_usd"))
-    data["debt_ves"] = money(data.get("debt_ves"))
+    data["debt_ves"] = debt_usd * rate
     data["rate"] = rate
     data["paid_ves"] = paid_ves
     data["paid_usd"] = paid_usd
@@ -432,8 +437,7 @@ def public_driver(row, include_events=False):
     data["pending_usd"] = pending_usd
     data["missing_after_reports_ves"] = missing_after_reports_ves
     data["missing_after_reports_usd"] = missing_after_reports_usd
-    debt_ves = money(data.get("debt_ves"))
-    data["ready_to_conciliate"] = debt_ves > 0 and coverage_ves >= debt_ves - max(1.0, debt_ves * 0.01)
+    data["ready_to_conciliate"] = debt_usd > 0 and coverage_usd >= debt_usd - max(0.01, debt_usd * 0.01)
     data["successful_call_count"] = int(data.get("successful_call_count") or 0)
     data["missed_call_count"] = int(data.get("missed_call_count") or 0)
     data["followup_count"] = int(data.get("followup_count") or 0)
@@ -472,6 +476,8 @@ def driver_with_latest_payment(con, where="", params=None):
                    select json_object(
                        'id', payments.id,
                        'amount_ves', payments.amount_ves,
+                       'rate_at_payment', payments.rate_at_payment,
+                       'amount_usd_at_payment', payments.amount_usd_at_payment,
                        'reference', payments.reference,
                        'bank', payments.bank,
                        'payment_phone', payments.payment_phone,
@@ -515,10 +521,20 @@ def driver_with_latest_payment(con, where="", params=None):
                    where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
                ), 0) as paid_ves,
                coalesce((
+                   select sum(payments.amount_usd_at_payment)
+                   from payments
+                   where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
+               ), 0) as paid_usd,
+               coalesce((
                    select sum(payments.amount_ves)
                    from payments
                    where payments.driver_id = drivers.id and payments.status in ('pago_reportado', 'en_validacion')
-               ), 0) as review_ves
+               ), 0) as review_ves,
+               coalesce((
+                   select sum(payments.amount_usd_at_payment)
+                   from payments
+                   where payments.driver_id = drivers.id and payments.status in ('pago_reportado', 'en_validacion')
+               ), 0) as review_usd
         from drivers
         {where}
         order by drivers.updated_at desc
@@ -565,15 +581,10 @@ def summary_by_status(user):
             select drivers.status,
                    count(*) as case_count,
                    coalesce(sum(drivers.debt_usd), 0) as debt_usd,
-                   coalesce(sum(
-                       case
-                           when drivers.rate > 0 then paid.paid_ves / drivers.rate
-                           else 0
-                       end
-                   ), 0) as paid_usd
+                   coalesce(sum(paid.paid_usd), 0) as paid_usd
             from drivers
             left join (
-                select driver_id, sum(amount_ves) as paid_ves
+                select driver_id, sum(amount_usd_at_payment) as paid_usd
                 from payments
                 where status in ('pago_parcial', 'conciliado')
                 group by driver_id
@@ -674,11 +685,12 @@ def upsert_driver(con, payload, source="manual"):
 def evaluate_payment(con, driver, body):
     reference = normalize_reference(body.get("reference"))
     amount = money(body.get("amount_ves"))
-    paid = con.execute(
-        "select coalesce(sum(amount_ves), 0) as paid from payments where driver_id = ? and status in ('pago_parcial', 'conciliado')",
+    paid_usd = con.execute(
+        "select coalesce(sum(amount_usd_at_payment), 0) as paid from payments where driver_id = ? and status in ('pago_parcial', 'conciliado')",
         (driver["id"],),
     ).fetchone()["paid"]
-    expected = max(0.0, money(driver["debt_ves"]) - money(paid))
+    expected_usd = max(0.0, money(driver["debt_usd"]) - money(paid_usd))
+    expected = expected_usd * money(driver["rate"])
     phone_ok = driver["phone_norm"] in phone_variants(body.get("payment_phone"))
     amount_ok = abs(amount - expected) <= max(1.0, expected * 0.01)
     duplicate = con.execute(
@@ -720,6 +732,10 @@ def sheet_range(sheet_name, cells):
     return f"'{sheet_name}'!{cells}"
 
 
+def header_last_column(headers):
+    return column_letter(len(headers) - 1)
+
+
 def ensure_sheet_with_headers(service, sheet_name, headers):
     spreadsheet = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
     sheets = spreadsheet.get("sheets", [])
@@ -728,7 +744,7 @@ def ensure_sheet_with_headers(service, sheet_name, headers):
             spreadsheetId=SHEET_ID,
             body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
         ).execute()
-    last_column = column_letter(len(headers) - 1)
+    last_column = header_last_column(headers)
     service.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
         range=sheet_range(sheet_name, f"A1:{last_column}1"),
@@ -934,6 +950,8 @@ def payment_backup_row(driver, payment, user=None):
         payment.get("validated_at") or "",
         payment.get("created_at") or "",
         payment.get("updated_at") or "",
+        payment.get("rate_at_payment") or "",
+        payment.get("amount_usd_at_payment") or "",
     ]
 
 
@@ -944,9 +962,10 @@ def backup_payment_to_sheets(driver, payment, user=None):
     try:
         ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
         values_api = service.spreadsheets().values()
+        last_col = header_last_column(PORTAL_PAYMENT_HEADERS)
         rows = values_api.get(
             spreadsheetId=SHEET_ID,
-            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A1:AF5000"),
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A1:{last_col}5000"),
         ).execute().get("values", [])
         target_row = None
         for row_number, row in enumerate(rows[1:], start=2):
@@ -957,14 +976,14 @@ def backup_payment_to_sheets(driver, payment, user=None):
         if target_row:
             values_api.update(
                 spreadsheetId=SHEET_ID,
-                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A{target_row}:AF{target_row}"),
+                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A{target_row}:{last_col}{target_row}"),
                 valueInputOption="USER_ENTERED",
                 body={"values": [row_values]},
             ).execute()
         else:
             values_api.append(
                 spreadsheetId=SHEET_ID,
-                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A:AF"),
+                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A:{last_col}"),
                 valueInputOption="USER_ENTERED",
                 insertDataOption="INSERT_ROWS",
                 body={"values": [row_values]},
@@ -983,9 +1002,10 @@ def delete_payment_backup_from_sheets(backup_key):
     try:
         ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
         values_api = service.spreadsheets().values()
+        last_col = header_last_column(PORTAL_PAYMENT_HEADERS)
         rows = values_api.get(
             spreadsheetId=SHEET_ID,
-            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A1:AF5000"),
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A1:{last_col}5000"),
         ).execute().get("values", [])
         for row_number, row in enumerate(rows[1:], start=2):
             if clean_text(row[0] if row else "") == backup_key:
@@ -1015,9 +1035,10 @@ def restore_payment_backups_from_sheets():
         return {"ok": False, "restored": 0, "error": "Google Sheets no configurado"}
     try:
         ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
+        last_col = header_last_column(PORTAL_PAYMENT_HEADERS)
         rows = service.spreadsheets().values().get(
             spreadsheetId=SHEET_ID,
-            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A2:AF5000"),
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A2:{last_col}5000"),
         ).execute().get("values", [])
     except Exception as exc:
         print(f"No se pudo leer {PORTAL_PAYMENTS_SHEET_NAME}: {exc}")
@@ -1050,12 +1071,17 @@ def restore_payment_backups_from_sheets():
                     driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
                 existing = con.execute("select id from payments where backup_key = ?", (backup_key,)).fetchone()
                 timestamp = now_iso()
+                amount_ves = money(row.get("amount_ves"))
+                rate_at_payment = money(row.get("rate_at_payment")) or money(row.get("rate")) or money(driver["rate"])
+                amount_usd_at_payment = money(row.get("amount_usd_at_payment")) or (amount_ves / rate_at_payment if rate_at_payment else 0.0)
                 values = (
                     driver["id"],
                     clean_text(row.get("cedula_reportada") or cedula),
                     clean_text(row.get("payment_phone")),
                     clean_text(row.get("plate_reportada") or row.get("driver_plate")).upper(),
-                    money(row.get("amount_ves")),
+                    amount_ves,
+                    rate_at_payment,
+                    amount_usd_at_payment,
                     clean_text(row.get("reference")),
                     clean_text(row.get("reference_norm") or normalize_reference(row.get("reference"))),
                     clean_text(row.get("bank")),
@@ -1080,6 +1106,7 @@ def restore_payment_backups_from_sheets():
                         """
                         update payments set
                             driver_id = ?, cedula = ?, payment_phone = ?, plate = ?, amount_ves = ?,
+                            rate_at_payment = ?, amount_usd_at_payment = ?,
                             reference = ?, reference_norm = ?, bank = ?, payment_date = ?, payment_method = ?,
                             observations = ?, attachment_path = ?, attachment_name = ?, attachment_type = ?,
                             status = ?, alerts_json = ?, internal_notes = ?, reconciliation_agent = ?,
@@ -1092,11 +1119,11 @@ def restore_payment_backups_from_sheets():
                     con.execute(
                         """
                         insert into payments (
-                            driver_id, cedula, payment_phone, plate, amount_ves, reference, reference_norm,
+                            driver_id, cedula, payment_phone, plate, amount_ves, rate_at_payment, amount_usd_at_payment, reference, reference_norm,
                             bank, payment_date, payment_method, observations, attachment_path, attachment_name,
                             attachment_type, status, alerts_json, internal_notes, reconciliation_agent,
                             validated_reference, validated_at, created_at, updated_at, backup_key
-                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         values,
                     )
@@ -1330,9 +1357,32 @@ def ensure_payment_columns(con):
     existing = {row["name"] for row in con.execute("pragma table_info(payments)")}
     if "reconciliation_agent" not in existing:
         con.execute("alter table payments add column reconciliation_agent text")
+    if "rate_at_payment" not in existing:
+        con.execute("alter table payments add column rate_at_payment real")
+    if "amount_usd_at_payment" not in existing:
+        con.execute("alter table payments add column amount_usd_at_payment real")
     if "backup_key" not in existing:
         con.execute("alter table payments add column backup_key text")
     con.execute("update payments set backup_key = lower(hex(randomblob(16))) where backup_key is null or backup_key = ''")
+    con.execute(
+        """
+        update payments
+        set rate_at_payment = (
+                select drivers.rate from drivers where drivers.id = payments.driver_id
+            )
+        where rate_at_payment is null or rate_at_payment = 0
+        """
+    )
+    con.execute(
+        """
+        update payments
+        set amount_usd_at_payment = case
+                when rate_at_payment > 0 then amount_ves / rate_at_payment
+                else 0
+            end
+        where amount_usd_at_payment is null or amount_usd_at_payment = 0
+        """
+    )
     con.execute("create unique index if not exists idx_payments_backup_key on payments(backup_key)")
 
 
@@ -1406,6 +1456,8 @@ def init_db():
                 payment_phone text not null,
                 plate text not null,
                 amount_ves real not null,
+                rate_at_payment real,
+                amount_usd_at_payment real,
                 reference text not null,
                 reference_norm text not null,
                 bank text not null,
@@ -1656,20 +1708,25 @@ class Handler(BaseHTTPRequestHandler):
                         attachment_path, attachment_name, attachment_type = save_upload(body.get("attachment_file"))
                         timestamp = now_iso()
                         backup_key = uuid.uuid4().hex
+                        rate_at_payment = money(driver["rate"])
+                        amount_ves = money(body.get("amount_ves"))
+                        amount_usd_at_payment = amount_ves / rate_at_payment if rate_at_payment else 0.0
                         payment_id = con.execute(
                             """
                             insert into payments (
-                                driver_id, cedula, payment_phone, plate, amount_ves, reference, reference_norm,
+                                driver_id, cedula, payment_phone, plate, amount_ves, rate_at_payment, amount_usd_at_payment, reference, reference_norm,
                                 bank, payment_date, payment_method, observations, attachment_path, attachment_name,
                                 attachment_type, status, alerts_json, backup_key, created_at, updated_at
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
                             """,
                             (
                                 driver["id"],
                                 clean_text(body.get("cedula")),
                                 clean_text(body.get("payment_phone")),
                                 clean_text(body.get("plate")).upper(),
-                                money(body.get("amount_ves")),
+                                amount_ves,
+                                rate_at_payment,
+                                amount_usd_at_payment,
                                 clean_text(body.get("reference")),
                                 normalize_reference(body.get("reference")),
                                 clean_text(body.get("bank")),
