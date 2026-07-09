@@ -199,6 +199,25 @@ def hash_password(password):
     return hashlib.sha256(str(password).encode("utf-8")).hexdigest()
 
 
+def parse_external_timestamp(value):
+    value = clean_text(value)
+    if not value:
+        return now_iso()
+    candidate = value.replace("Z", "+00:00")
+    try:
+        datetime.fromisoformat(candidate)
+        return candidate
+    except ValueError:
+        return ""
+
+
+def parse_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def parse_json_body(handler):
     length = int(handler.headers.get("Content-Length", "0") or 0)
     if not length:
@@ -1851,6 +1870,57 @@ class Handler(BaseHTTPRequestHandler):
                     row = con.execute("select * from users where id = ?", (user_id,)).fetchone()
                     save_users_snapshot_to_sheets(con)
                 return send_json(self, {"user": public_user(row)})
+
+            if parsed.path == "/api/unlocks":
+                if not can_unlock(user):
+                    return send_json(self, {"error": "No autorizado para desbloquear"}, 403)
+                external_driver_id = clean_text(body.get("driver_id") or body.get("driver_external_id"))
+                internal_driver_id = parse_int(body.get("case_id") or body.get("id"))
+                unlock_status = clean_text(body.get("estado_desbloqueo") or body.get("status") or body.get("estado"))
+                timestamp = parse_external_timestamp(body.get("timestamp") or body.get("unlocked_at") or body.get("fecha_desbloqueo"))
+                if not external_driver_id and not internal_driver_id:
+                    return send_json(self, {"error": "driver_id es obligatorio"}, 400)
+                if unlock_status != "desbloqueado":
+                    return send_json(self, {"error": "Por ahora este endpoint solo acepta estado_desbloqueo = desbloqueado"}, 400)
+                if not timestamp:
+                    return send_json(self, {"error": "timestamp debe venir en formato ISO, por ejemplo 2026-07-09T19:44:05-04:00"}, 400)
+                sync_result = {"ok": False, "updated": False, "error": "Sin pago asociado"}
+                with DB_LOCK:
+                    with db() as con:
+                        if external_driver_id:
+                            driver = con.execute("select * from drivers where driver_external_id = ?", (external_driver_id,)).fetchone()
+                        else:
+                            driver = con.execute("select * from drivers where id = ?", (internal_driver_id,)).fetchone()
+                        if not driver:
+                            return send_json(self, {"error": "Caso no encontrado para ese driver_id"}, 404)
+                        if driver["status"] not in ("conciliado", "desbloqueado"):
+                            return send_json(self, {"error": "Solo se puede desbloquear un caso conciliado"}, 400)
+                        con.execute(
+                            "update drivers set status = 'desbloqueado', unlocked_by = ?, unlocked_at = ?, updated_at = ? where id = ?",
+                            (user["id"], timestamp, timestamp, driver["id"]),
+                        )
+                        add_event(
+                            con,
+                            driver["id"],
+                            user["id"],
+                            "desbloqueo_wallet_api",
+                            "Wallet marcada como desbloqueada via API",
+                            {"driver_id": external_driver_id or internal_driver_id, "timestamp": timestamp},
+                        )
+                        payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver["id"],)).fetchone())
+                        updated_driver = driver_with_latest_payment(con, "where drivers.id = ?", [driver["id"]]).fetchone()
+                        if payment:
+                            backup_payment_to_sheets(row_to_dict(updated_driver), payment, user)
+                            try:
+                                sync_result = update_conciliated_status_in_sheets(row_to_dict(updated_driver), payment, user, "desbloqueado")
+                                if sync_result.get("ok"):
+                                    add_event(con, driver["id"], user["id"], "sync_conciliados", "Tab Conciliados actualizado: Desbloqueado")
+                                else:
+                                    add_event(con, driver["id"], user["id"], "sync_conciliados_error", sync_result.get("error", "Google Sheets no configurado"))
+                            except Exception as exc:
+                                sync_result = {"ok": False, "updated": False, "error": str(exc)}
+                                add_event(con, driver["id"], user["id"], "sync_conciliados_error", str(exc))
+                return send_json(self, {"ok": True, "driver": public_driver(updated_driver), "sheets": sync_result})
 
             if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/followup"):
                 driver_id = int(parsed.path.split("/")[3])

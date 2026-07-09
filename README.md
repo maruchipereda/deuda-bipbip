@@ -93,3 +93,20 @@ referencia_validada, fecha_conciliacion, responsable, estado, desbloqueo
 ```
 
 Si Google Sheets no esta configurado, el caso queda conciliado en SQLite y aparece en la vista `Lista para desbloqueo`.
+
+## Endpoint de desbloqueo
+
+Para actualizar un desbloqueo desde otra herramienta, primero inicia sesion y usa el token Bearer. El endpoint acepta roles `master`, `admin` u `operaciones`.
+
+```bash
+curl -X POST https://deuda-bipbip-production.up.railway.app/api/unlocks \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "driver_id": "ad901ff4abce4425832ce7c0358590d8",
+    "timestamp": "2026-07-09T15:44:05-04:00",
+    "estado_desbloqueo": "desbloqueado"
+  }'
+```
+
+Esto actualiza el estado en la web, registra auditoria y sincroniza `estado_desbloqueo` + `fecha_desbloqueo` en `Conciliados`.
