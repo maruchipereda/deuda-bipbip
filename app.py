@@ -980,7 +980,7 @@ class Handler(BaseHTTPRequestHandler):
             cases = list_cases(user, parse_qs(parsed.query))
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["nombre", "cedula", "telefono", "placa", "driver_id", "deuda_usd", "tasa", "deuda_ves", "estado", "referencia", "monto_reportado", "actualizado"])
+            writer.writerow(["nombre", "cedula", "telefono", "placa", "driver_id", "deuda_usd", "tasa", "deuda_ves", "estado", "referencia", "monto_reportado", "llamadas_exitosas", "llamadas_perdidas", "seguimientos", "actualizado"])
             for item in cases:
                 payment = item.get("payment") or {}
                 writer.writerow([
@@ -995,6 +995,9 @@ class Handler(BaseHTTPRequestHandler):
                     item.get("status_label") or item.get("status"),
                     payment.get("reference", ""),
                     payment.get("amount_ves", ""),
+                    item.get("successful_call_count", 0),
+                    item.get("missed_call_count", 0),
+                    item.get("followup_count", 0),
                     item.get("updated_at", ""),
                 ])
             return send_text(self, output.getvalue(), "text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="deuda-bipbip.csv"'})
