@@ -28,6 +28,7 @@ SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", DEFAULT_SHEET_ID)
 DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
 PORTAL_CONFIG_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_CONFIG_SHEET", "PortalConfig")
+PORTAL_PAYMENTS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_PAYMENTS_SHEET", "PortalPagos")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
 SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
 AUTH_TOKENS = {}
@@ -76,6 +77,40 @@ CONCILIATED_HEADERS = [
 ]
 
 PORTAL_CONFIG_HEADERS = ["key", "value", "updated_at"]
+PORTAL_PAYMENT_HEADERS = [
+    "backup_key",
+    "driver_cedula",
+    "driver_phone",
+    "driver_name",
+    "driver_plate",
+    "driver_external_id",
+    "debt_usd",
+    "debt_ves",
+    "rate",
+    "driver_status",
+    "cedula_reportada",
+    "payment_phone",
+    "plate_reportada",
+    "amount_ves",
+    "reference",
+    "reference_norm",
+    "bank",
+    "payment_date",
+    "payment_method",
+    "observations",
+    "attachment_path",
+    "attachment_name",
+    "attachment_type",
+    "payment_status",
+    "alerts_json",
+    "internal_notes",
+    "reconciliation_agent",
+    "validated_reference",
+    "validated_by_email",
+    "validated_at",
+    "created_at",
+    "updated_at",
+]
 TRANSIENT_SETTING_KEYS = {"sync_status", "debt_sync_local_date", "debt_sync_version"}
 
 
@@ -743,6 +778,217 @@ def ensure_portal_config_snapshot(con):
             save_settings_snapshot_to_sheets(con)
 
 
+def payment_backup_row(driver, payment, user=None):
+    return [
+        payment.get("backup_key") or "",
+        driver.get("cedula") or "",
+        driver.get("phone") or "",
+        driver.get("name") or "",
+        driver.get("plate") or "",
+        driver.get("driver_external_id") or "",
+        driver.get("debt_usd") or "",
+        driver.get("debt_ves") or "",
+        driver.get("rate") or "",
+        driver.get("status") or "",
+        payment.get("cedula") or "",
+        payment.get("payment_phone") or "",
+        payment.get("plate") or "",
+        payment.get("amount_ves") or "",
+        payment.get("reference") or "",
+        payment.get("reference_norm") or "",
+        payment.get("bank") or "",
+        payment.get("payment_date") or "",
+        payment.get("payment_method") or "",
+        payment.get("observations") or "",
+        payment.get("attachment_path") or "",
+        payment.get("attachment_name") or "",
+        payment.get("attachment_type") or "",
+        payment.get("status") or "",
+        payment.get("alerts_json") or "[]",
+        payment.get("internal_notes") or "",
+        payment.get("reconciliation_agent") or "",
+        payment.get("validated_reference") or "",
+        (user or {}).get("email") or "",
+        payment.get("validated_at") or "",
+        payment.get("created_at") or "",
+        payment.get("updated_at") or "",
+    ]
+
+
+def backup_payment_to_sheets(driver, payment, user=None):
+    service = google_service()
+    if not service or not payment or not payment.get("backup_key"):
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
+        values_api = service.spreadsheets().values()
+        rows = values_api.get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A1:AF5000"),
+        ).execute().get("values", [])
+        target_row = None
+        for row_number, row in enumerate(rows[1:], start=2):
+            if clean_text(row[0] if row else "") == payment.get("backup_key"):
+                target_row = row_number
+                break
+        row_values = payment_backup_row(driver, payment, user)
+        if target_row:
+            values_api.update(
+                spreadsheetId=SHEET_ID,
+                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, f"A{target_row}:AF{target_row}"),
+                valueInputOption="USER_ENTERED",
+                body={"values": [row_values]},
+            ).execute()
+        else:
+            values_api.append(
+                spreadsheetId=SHEET_ID,
+                range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A:AF"),
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row_values]},
+            ).execute()
+        return {"ok": True}
+    except Exception as exc:
+        print(f"No se pudo guardar {PORTAL_PAYMENTS_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+def restore_payment_backups_from_sheets():
+    service = google_service()
+    if not service:
+        return {"ok": False, "restored": 0, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_PAYMENTS_SHEET_NAME, PORTAL_PAYMENT_HEADERS)
+        rows = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_PAYMENTS_SHEET_NAME, "A2:AF5000"),
+        ).execute().get("values", [])
+    except Exception as exc:
+        print(f"No se pudo leer {PORTAL_PAYMENTS_SHEET_NAME}: {exc}")
+        return {"ok": False, "restored": 0, "error": str(exc)}
+    restored = 0
+    with DB_LOCK:
+        with db() as con:
+            for raw in rows:
+                row = dict(zip(PORTAL_PAYMENT_HEADERS, list(raw) + [""] * (len(PORTAL_PAYMENT_HEADERS) - len(raw))))
+                backup_key = clean_text(row.get("backup_key"))
+                cedula = clean_text(row.get("driver_cedula") or row.get("cedula_reportada"))
+                if not backup_key or not cedula:
+                    continue
+                driver = con.execute("select * from drivers where cedula_norm = ?", (normalize_digits(cedula),)).fetchone()
+                if not driver:
+                    driver_id = upsert_driver(
+                        con,
+                        {
+                            "name": row.get("driver_name"),
+                            "cedula": cedula,
+                            "phone": row.get("driver_phone") or row.get("payment_phone"),
+                            "plate": row.get("driver_plate") or row.get("plate_reportada"),
+                            "driver_external_id": row.get("driver_external_id"),
+                            "debt_usd": row.get("debt_usd"),
+                            "rate": row.get("rate"),
+                            "debt_ves": row.get("debt_ves"),
+                        },
+                        "portal_pagos_backup",
+                    )
+                    driver = con.execute("select * from drivers where id = ?", (driver_id,)).fetchone()
+                existing = con.execute("select id from payments where backup_key = ?", (backup_key,)).fetchone()
+                timestamp = now_iso()
+                values = (
+                    driver["id"],
+                    clean_text(row.get("cedula_reportada") or cedula),
+                    clean_text(row.get("payment_phone")),
+                    clean_text(row.get("plate_reportada") or row.get("driver_plate")).upper(),
+                    money(row.get("amount_ves")),
+                    clean_text(row.get("reference")),
+                    clean_text(row.get("reference_norm") or normalize_reference(row.get("reference"))),
+                    clean_text(row.get("bank")),
+                    clean_text(row.get("payment_date")),
+                    clean_text(row.get("payment_method")) or "transferencia",
+                    clean_text(row.get("observations")),
+                    clean_text(row.get("attachment_path")),
+                    clean_text(row.get("attachment_name")),
+                    clean_text(row.get("attachment_type")),
+                    clean_text(row.get("payment_status")) or "pago_reportado",
+                    clean_text(row.get("alerts_json")) or "[]",
+                    clean_text(row.get("internal_notes")),
+                    clean_text(row.get("reconciliation_agent")),
+                    clean_text(row.get("validated_reference")),
+                    clean_text(row.get("validated_at")),
+                    clean_text(row.get("created_at")) or timestamp,
+                    clean_text(row.get("updated_at")) or timestamp,
+                    backup_key,
+                )
+                if existing:
+                    con.execute(
+                        """
+                        update payments set
+                            driver_id = ?, cedula = ?, payment_phone = ?, plate = ?, amount_ves = ?,
+                            reference = ?, reference_norm = ?, bank = ?, payment_date = ?, payment_method = ?,
+                            observations = ?, attachment_path = ?, attachment_name = ?, attachment_type = ?,
+                            status = ?, alerts_json = ?, internal_notes = ?, reconciliation_agent = ?,
+                            validated_reference = ?, validated_at = ?, created_at = ?, updated_at = ?
+                        where backup_key = ?
+                        """,
+                        values,
+                    )
+                else:
+                    con.execute(
+                        """
+                        insert into payments (
+                            driver_id, cedula, payment_phone, plate, amount_ves, reference, reference_norm,
+                            bank, payment_date, payment_method, observations, attachment_path, attachment_name,
+                            attachment_type, status, alerts_json, internal_notes, reconciliation_agent,
+                            validated_reference, validated_at, created_at, updated_at, backup_key
+                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        values,
+                    )
+                    restored += 1
+                status = clean_text(row.get("driver_status") or row.get("payment_status"))
+                if status in CASE_STATUSES:
+                    con.execute("update drivers set status = ?, updated_at = ? where id = ?", (status, now_iso(), driver["id"]))
+            if restored:
+                set_setting(con, "sync_status", f"Restaurados {restored} pagos desde {PORTAL_PAYMENTS_SHEET_NAME} en {now_iso()}")
+    return {"ok": True, "restored": restored}
+
+
+def snapshot_local_payment_backups_to_sheets():
+    with db() as con:
+        rows = con.execute(
+            """
+            select payments.*, drivers.name as driver_name, drivers.cedula as driver_cedula,
+                   drivers.phone as driver_phone, drivers.plate as driver_plate,
+                   drivers.driver_external_id, drivers.debt_usd, drivers.debt_ves,
+                   drivers.rate, drivers.status as driver_status
+            from payments
+            join drivers on drivers.id = payments.driver_id
+            order by payments.created_at
+            """
+        ).fetchall()
+    backed_up = 0
+    for row in rows:
+        item = row_to_dict(row)
+        driver = {
+            "name": item.get("driver_name"),
+            "cedula": item.get("driver_cedula"),
+            "phone": item.get("driver_phone"),
+            "plate": item.get("driver_plate"),
+            "driver_external_id": item.get("driver_external_id"),
+            "debt_usd": item.get("debt_usd"),
+            "debt_ves": item.get("debt_ves"),
+            "rate": item.get("rate"),
+            "status": item.get("driver_status"),
+        }
+        result = backup_payment_to_sheets(driver, item)
+        if result.get("ok"):
+            backed_up += 1
+    if backed_up:
+        with db() as con:
+            set_setting(con, "sync_status", f"Respaldados {backed_up} pagos en {PORTAL_PAYMENTS_SHEET_NAME} en {now_iso()}")
+    return {"ok": True, "backed_up": backed_up}
+
+
 def header_index(headers, candidates, fallback):
     normalized = [clean_text(item).lower().replace("é", "e").replace("á", "a").replace("ó", "o") for item in headers]
     for candidate in candidates:
@@ -928,6 +1174,10 @@ def ensure_payment_columns(con):
     existing = {row["name"] for row in con.execute("pragma table_info(payments)")}
     if "reconciliation_agent" not in existing:
         con.execute("alter table payments add column reconciliation_agent text")
+    if "backup_key" not in existing:
+        con.execute("alter table payments add column backup_key text")
+    con.execute("update payments set backup_key = lower(hex(randomblob(16))) where backup_key is null or backup_key = ''")
+    con.execute("create unique index if not exists idx_payments_backup_key on payments(backup_key)")
 
 
 def maybe_sync_debts():
@@ -1017,6 +1267,7 @@ def init_db():
                 validated_reference text,
                 validated_by integer references users(id),
                 validated_at text,
+                backup_key text unique,
                 created_at text not null,
                 updated_at text not null
             )
@@ -1164,7 +1415,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/bootstrap":
             with db() as con:
-                users = [public_user(row) for row in con.execute("select * from users order by role, name")]
+                users = [public_user(row) for row in con.execute("select * from users order by role, name")] if user["role"] == "master" else []
                 settings = get_settings(con)
             return send_json(self, {"user": user, "users": users, "settings": settings, "statuses": CASE_STATUSES})
         if parsed.path == "/api/summary":
@@ -1243,13 +1494,14 @@ class Handler(BaseHTTPRequestHandler):
                             )
                         attachment_path, attachment_name, attachment_type = save_upload(body.get("attachment_file"))
                         timestamp = now_iso()
+                        backup_key = uuid.uuid4().hex
                         payment_id = con.execute(
                             """
                             insert into payments (
                                 driver_id, cedula, payment_phone, plate, amount_ves, reference, reference_norm,
                                 bank, payment_date, payment_method, observations, attachment_path, attachment_name,
-                                attachment_type, status, alerts_json, created_at, updated_at
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?)
+                                attachment_type, status, alerts_json, backup_key, created_at, updated_at
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
                             """,
                             (
                                 driver["id"],
@@ -1267,12 +1519,16 @@ class Handler(BaseHTTPRequestHandler):
                                 attachment_name,
                                 attachment_type,
                                 json.dumps(alerts, ensure_ascii=False),
+                                backup_key,
                                 timestamp,
                                 timestamp,
                             ),
                         ).lastrowid
                         con.execute("update drivers set status = 'pago_reportado', plate = coalesce(nullif(?, ''), plate), updated_at = ? where id = ?", (clean_text(body.get("plate")).upper(), timestamp, driver["id"]))
                         add_event(con, driver["id"], None, "submission_formulario", "Pago reportado por conductor", {"payment_id": payment_id, "alerts": alerts})
+                        updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver["id"],)).fetchone())
+                        updated_payment = row_to_dict(con.execute("select * from payments where id = ?", (payment_id,)).fetchone())
+                        backup_payment_to_sheets(updated_driver, updated_payment)
                 return send_json(self, {"ok": True, "message": "Pago reportado. El equipo de conciliacion lo revisara."}, 201)
 
             user = require_user(self)
@@ -1330,8 +1586,8 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, {"settings": settings})
 
             if parsed.path == "/api/users/save":
-                if not can_manage(user):
-                    return send_json(self, {"error": "Solo master o admin pueden configurar usuarios"}, 403)
+                if user["role"] != "master":
+                    return send_json(self, {"error": "Solo master puede configurar usuarios"}, 403)
                 user_id = int(body.get("id") or 0)
                 name = clean_text(body.get("name"))
                 email = clean_text(body.get("email")).lower()
@@ -1425,6 +1681,7 @@ class Handler(BaseHTTPRequestHandler):
                         updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver_id,)).fetchone())
                         updated_payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone())
                         if updated_payment:
+                            backup_payment_to_sheets(updated_driver, updated_payment, user)
                             try:
                                 if status == "conciliado":
                                     sync_result = append_conciliated_to_sheets(updated_driver, updated_payment, user)
@@ -1469,6 +1726,7 @@ class Handler(BaseHTTPRequestHandler):
                     payment = row_to_dict(con.execute("select * from payments where driver_id = ? order by created_at desc limit 1", (driver_id,)).fetchone())
                     updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver_id,)).fetchone())
                     if payment:
+                        backup_payment_to_sheets(updated_driver, payment, user)
                         try:
                             update_conciliated_status_in_sheets(updated_driver, payment, user, "desbloqueado")
                         except Exception as exc:
@@ -1483,6 +1741,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     init_db()
     ensure_initial_debt_sync()
+    restore_payment_backups_from_sheets()
+    snapshot_local_payment_backups_to_sheets()
     port = int(os.environ.get("PORT", "8787"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Deuda BipBip corriendo en http://127.0.0.1:{port}")

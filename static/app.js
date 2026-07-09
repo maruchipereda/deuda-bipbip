@@ -244,6 +244,7 @@ async function bootstrap() {
 function applyPermissions() {
   const manage = ["master", "admin"].includes(state.user?.role);
   $$(".manage-only").forEach((node) => node.classList.toggle("hidden", !manage));
+  $$(".master-only").forEach((node) => node.classList.toggle("hidden", state.user?.role !== "master"));
   if (state.user?.role === "operaciones") {
     setBucket("desbloqueo");
   }
