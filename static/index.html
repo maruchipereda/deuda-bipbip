@@ -88,17 +88,45 @@
                 <input id="payReference" autocomplete="off" required />
               </label>
               <label>Banco emisor
-                <input id="payBank" required />
+                <select id="payBank" required>
+                  <option value="">Selecciona el banco</option>
+                  <option value="0001 - BANCO CENTRAL DE VENEZUELA">0001 - BANCO CENTRAL DE VENEZUELA</option>
+                  <option value="0102 - BANCO DE VENEZUELA, S.A. BANCO UNIVERSAL">0102 - BANCO DE VENEZUELA, S.A. BANCO UNIVERSAL</option>
+                  <option value="0104 - BANCO VENEZOLANO DE CREDITO, S.A BANCO UNIVERSAL">0104 - BANCO VENEZOLANO DE CREDITO, S.A BANCO UNIVERSAL</option>
+                  <option value="0105 - BANCO MERCANTIL C.A., BANCO UNIVERSAL">0105 - BANCO MERCANTIL C.A., BANCO UNIVERSAL</option>
+                  <option value="0108 - BANCO PROVINCIAL, S.A. BANCO UNIVERSAL">0108 - BANCO PROVINCIAL, S.A. BANCO UNIVERSAL</option>
+                  <option value="0114 - BANCO DEL CARIBE C.A., BANCO UNIVERSAL">0114 - BANCO DEL CARIBE C.A., BANCO UNIVERSAL</option>
+                  <option value="0115 - BANCO EXTERIOR C.A., BANCO UNIVERSAL">0115 - BANCO EXTERIOR C.A., BANCO UNIVERSAL</option>
+                  <option value="0128 - BANCO CARONI C.A., BANCO UNIVERSAL">0128 - BANCO CARONI C.A., BANCO UNIVERSAL</option>
+                  <option value="0134 - BANESCO BANCO UNIVERSAL, C.A.">0134 - BANESCO BANCO UNIVERSAL, C.A.</option>
+                  <option value="0137 - BANCO SOFITASA BANCO UNIVERSAL, C.A.">0137 - BANCO SOFITASA BANCO UNIVERSAL, C.A.</option>
+                  <option value="0138 - BANCO PLAZA, BANCO UNIVERSAL">0138 - BANCO PLAZA, BANCO UNIVERSAL</option>
+                  <option value="0146 - BANCO DE LA GENTE EMPRENDEDORA C.A.">0146 - BANCO DE LA GENTE EMPRENDEDORA C.A.</option>
+                  <option value="0151 - BANCO FONDO COMUN, C.A BANCO UNIVERSAL">0151 - BANCO FONDO COMUN, C.A BANCO UNIVERSAL</option>
+                  <option value="0156 - 100% BANCO, BANCO COMERCIAL, C.A">0156 - 100% BANCO, BANCO COMERCIAL, C.A</option>
+                  <option value="0157 - DELSUR, BANCO UNIVERSAL C.A.">0157 - DELSUR, BANCO UNIVERSAL C.A.</option>
+                  <option value="0163 - BANCO DEL TESORO C.A., BANCO UNIVERSAL">0163 - BANCO DEL TESORO C.A., BANCO UNIVERSAL</option>
+                  <option value="0166 - BANCO AGRICOLA DE VENEZUELA C.A., BANCO UNIVERSAL">0166 - BANCO AGRICOLA DE VENEZUELA C.A., BANCO UNIVERSAL</option>
+                  <option value="0168 - BANCRECER S.A., BANCO MICROFINANCIERO">0168 - BANCRECER S.A., BANCO MICROFINANCIERO</option>
+                  <option value="0169 - R4, BANCO MICROFINANCIERO, C.A.">0169 - R4, BANCO MICROFINANCIERO, C.A.</option>
+                  <option value="0171 - BANCO ACTIVO C.A., BANCO UNIVERSAL">0171 - BANCO ACTIVO C.A., BANCO UNIVERSAL</option>
+                  <option value="0172 - BANCAMIGA BANCO UNIVERSAL, C.A.">0172 - BANCAMIGA BANCO UNIVERSAL, C.A.</option>
+                  <option value="0173 - BANCO INTERNACIONAL DE DESARROLLO C.A., BANCO UNIVERSAL">0173 - BANCO INTERNACIONAL DE DESARROLLO C.A., BANCO UNIVERSAL</option>
+                  <option value="0174 - BANPLUS BANCO UNIVERSAL, C.A.">0174 - BANPLUS BANCO UNIVERSAL, C.A.</option>
+                  <option value="0175 - BANCO DIGITAL DE LOS TRABAJADORES, BANCO UNIVERSAL C.A.">0175 - BANCO DIGITAL DE LOS TRABAJADORES, BANCO UNIVERSAL C.A.</option>
+                  <option value="0177 - BANCO DE LA FUERZA ARMADA NACIONAL BOLIVARIANA, B.U.">0177 - BANCO DE LA FUERZA ARMADA NACIONAL BOLIVARIANA, B.U.</option>
+                  <option value="0178 - N58 BANCO DIGITAL, BANCO MICROFINANCIERO">0178 - N58 BANCO DIGITAL, BANCO MICROFINANCIERO</option>
+                  <option value="0191 - BANCO NACIONAL DE CREDITO C.A., BANCO UNIVERSAL">0191 - BANCO NACIONAL DE CREDITO C.A., BANCO UNIVERSAL</option>
+                  <option value="0601 - INSTITUTO MUNICIPAL DE CREDITO POPULAR">0601 - INSTITUTO MUNICIPAL DE CREDITO POPULAR</option>
+                </select>
               </label>
               <label>Fecha del pago
                 <input id="payDate" type="date" required />
               </label>
               <label>Tipo de pago
                 <select id="payMethod" required>
+                  <option value="pago_movil">Pago movil</option>
                   <option value="transferencia">Transferencia a cuenta indicada</option>
-                  <option value="wallet">Recarga en wallet</option>
-                  <option value="tercero">Pago desde cuenta de tercero</option>
-                  <option value="otro">Otro</option>
                 </select>
               </label>
               <label class="span-2">Screenshot / comprobante
