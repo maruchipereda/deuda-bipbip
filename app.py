@@ -1477,11 +1477,13 @@ class Handler(BaseHTTPRequestHandler):
                     return send_json(self, {"error": "Todos los campos son obligatorios.", "missing": missing}, 400)
                 with DB_LOCK:
                     with db() as con:
-                        driver = find_driver(con, body.get("cedula"), body.get("registered_phone") or body.get("lookup_phone") or body.get("payment_phone"))
+                        lookup_cedula = body.get("lookup_cedula") or body.get("cedula")
+                        lookup_phone = body.get("registered_phone") or body.get("lookup_phone") or body.get("payment_phone")
+                        driver = find_driver(con, lookup_cedula, lookup_phone)
                         if not driver:
-                            driver = con.execute("select * from drivers where cedula_norm = ?", (normalize_digits(body.get("cedula")),)).fetchone()
+                            driver = con.execute("select * from drivers where cedula_norm = ?", (normalize_digits(lookup_cedula),)).fetchone()
                         if not driver:
-                            return send_json(self, {"error": "No encontramos el caso de deuda para esa cedula."}, 404)
+                            return send_json(self, {"error": "No encontramos el caso de deuda consultado. Vuelve a consultar la deuda antes de reportar el pago."}, 404)
                         alerts, duplicate = evaluate_payment(con, driver, body)
                         if duplicate:
                             return send_json(

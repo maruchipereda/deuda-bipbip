@@ -9,6 +9,7 @@ const state = {
   currentView: "cases",
   statusFilter: "",
   currentDriver: null,
+  lookupCedula: "",
   lookupPhone: "",
 };
 
@@ -153,6 +154,7 @@ async function lookupDebt(event) {
   event.preventDefault();
   const cedula = $("#lookupCedula").value.trim();
   const phone = $("#lookupPhone").value.trim();
+  state.lookupCedula = cedula;
   state.lookupPhone = phone;
   try {
     const payload = await api(`/api/public/debt?cedula=${encodeURIComponent(cedula)}&phone=${encodeURIComponent(phone)}`);
@@ -190,6 +192,7 @@ async function submitPayment(event) {
   const file = await readFile($("#payFile"));
   const payload = {
     cedula: $("#payCedula").value.trim(),
+    lookup_cedula: state.currentDriver?.cedula || state.lookupCedula || "",
     registered_phone: state.currentDriver?.phone || "",
     lookup_phone: state.lookupPhone || "",
     payment_phone: $("#payPhone").value.trim(),
