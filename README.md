@@ -110,3 +110,15 @@ curl -X POST https://deuda-bipbip-production.up.railway.app/api/unlocks \
 ```
 
 Esto actualiza el estado en la web, registra auditoria y sincroniza `estado_desbloqueo` + `fecha_desbloqueo` en `Conciliados`.
+
+Para reversar un desbloqueo accidental y dejar el caso como conciliado pendiente de desbloqueo:
+
+```bash
+curl -X POST https://deuda-bipbip-production.up.railway.app/api/unlocks \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "driver_id": "ad901ff4abce4425832ce7c0358590d8",
+    "estado_desbloqueo": "pendiente"
+  }'
+```
