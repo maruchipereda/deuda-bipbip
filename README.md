@@ -97,10 +97,11 @@ Si Google Sheets no esta configurado, el caso queda conciliado en SQLite y apare
 ## Endpoint de desbloqueo
 
 Para actualizar un desbloqueo desde otra herramienta, primero inicia sesion y usa el token Bearer. El endpoint acepta roles `master`, `admin` u `operaciones`.
+Tambien puedes usar una API key permanente con el header `X-API-Key`.
 
 ```bash
 curl -X POST https://deuda-bipbip-production.up.railway.app/api/unlocks \
-  -H "Authorization: Bearer TOKEN" \
+  -H "X-API-Key: TU_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "driver_id": "ad901ff4abce4425832ce7c0358590d8",
