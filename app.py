@@ -29,6 +29,7 @@ DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
 PORTAL_CONFIG_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_CONFIG_SHEET", "PortalConfig")
 PORTAL_PAYMENTS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_PAYMENTS_SHEET", "PortalPagos")
+PORTAL_USERS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_USERS_SHEET", "PortalUsers")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
 SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
 AUTH_TOKENS = {}
@@ -77,6 +78,7 @@ CONCILIATED_HEADERS = [
 ]
 
 PORTAL_CONFIG_HEADERS = ["key", "value", "updated_at"]
+PORTAL_USER_HEADERS = ["email", "name", "role", "password_hash", "active", "created_at", "updated_at"]
 PORTAL_PAYMENT_HEADERS = [
     "backup_key",
     "driver_cedula",
@@ -797,6 +799,107 @@ def ensure_portal_config_snapshot(con):
             save_settings_snapshot_to_sheets(con)
 
 
+def save_users_snapshot_to_sheets(con):
+    service = google_service()
+    if not service:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_USERS_SHEET_NAME, PORTAL_USER_HEADERS)
+        rows = [
+            [
+                row["email"],
+                row["name"],
+                row["role"],
+                row["password_hash"],
+                row["active"],
+                row["created_at"],
+                row["updated_at"],
+            ]
+            for row in con.execute("select * from users order by role, name")
+        ]
+        values_api = service.spreadsheets().values()
+        values_api.clear(spreadsheetId=SHEET_ID, range=sheet_range(PORTAL_USERS_SHEET_NAME, "A2:G500")).execute()
+        if rows:
+            values_api.update(
+                spreadsheetId=SHEET_ID,
+                range=sheet_range(PORTAL_USERS_SHEET_NAME, "A2:G500"),
+                valueInputOption="USER_ENTERED",
+                body={"values": rows},
+            ).execute()
+        return {"ok": True}
+    except Exception as exc:
+        print(f"No se pudo guardar {PORTAL_USERS_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+def restore_users_from_sheets():
+    service = google_service()
+    if not service:
+        return {"ok": False, "restored": 0, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_USERS_SHEET_NAME, PORTAL_USER_HEADERS)
+        rows = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_USERS_SHEET_NAME, "A2:G500"),
+        ).execute().get("values", [])
+    except Exception as exc:
+        print(f"No se pudo leer {PORTAL_USERS_SHEET_NAME}: {exc}")
+        return {"ok": False, "restored": 0, "error": str(exc)}
+    if not rows:
+        return {"ok": True, "restored": 0}
+    restored = 0
+    timestamp = now_iso()
+    with DB_LOCK:
+        with db() as con:
+            for raw in rows:
+                row = dict(zip(PORTAL_USER_HEADERS, list(raw) + [""] * (len(PORTAL_USER_HEADERS) - len(raw))))
+                email = clean_text(row.get("email")).lower()
+                role = clean_text(row.get("role"))
+                password_hash = clean_text(row.get("password_hash"))
+                if not email or role not in ("master", "admin", "conciliacion", "operaciones") or not password_hash:
+                    continue
+                created_at = clean_text(row.get("created_at")) or timestamp
+                updated_at = clean_text(row.get("updated_at")) or timestamp
+                active = 0 if clean_text(row.get("active")).lower() in ("0", "false", "no", "inactivo") else 1
+                existing = con.execute("select id from users where lower(email) = ?", (email,)).fetchone()
+                if existing:
+                    con.execute(
+                        """
+                        update users set name = ?, role = ?, password_hash = ?, active = ?, updated_at = ?
+                        where lower(email) = ?
+                        """,
+                        (clean_text(row.get("name")) or email, role, password_hash, active, updated_at, email),
+                    )
+                else:
+                    con.execute(
+                        """
+                        insert into users (name, email, role, password_hash, active, created_at, updated_at)
+                        values (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (clean_text(row.get("name")) or email, email, role, password_hash, active, created_at, updated_at),
+                    )
+                    restored += 1
+    return {"ok": True, "restored": restored}
+
+
+def ensure_users_snapshot(con):
+    service = google_service()
+    if not service:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_USERS_SHEET_NAME, PORTAL_USER_HEADERS)
+        rows = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_USERS_SHEET_NAME, "A2:G500"),
+        ).execute().get("values", [])
+        if rows:
+            return {"ok": True, "exists": True}
+        return save_users_snapshot_to_sheets(con)
+    except Exception as exc:
+        print(f"No se pudo asegurar {PORTAL_USERS_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
 def payment_backup_row(driver, payment, user=None):
     return [
         payment.get("backup_key") or "",
@@ -1353,6 +1456,9 @@ def init_db():
         seed_data(con)
         load_settings_from_sheets(con)
         ensure_portal_config_snapshot(con)
+    restore_users_from_sheets()
+    with db() as con:
+        ensure_users_snapshot(con)
 
 
 def seed_data(con):
@@ -1671,6 +1777,7 @@ class Handler(BaseHTTPRequestHandler):
                             (name, email, role, hash_password(password), active, timestamp, timestamp),
                         ).lastrowid
                     row = con.execute("select * from users where id = ?", (user_id,)).fetchone()
+                    save_users_snapshot_to_sheets(con)
                 return send_json(self, {"user": public_user(row)})
 
             if parsed.path.startswith("/api/cases/") and parsed.path.endswith("/followup"):
