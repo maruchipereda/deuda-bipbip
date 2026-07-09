@@ -29,6 +29,7 @@ DEBT_SHEET_NAME = os.environ.get("GOOGLE_DEBT_SHEET", "Deuda")
 CONCILIATED_SHEET_NAME = os.environ.get("GOOGLE_CONCILIATED_SHEET", "Conciliados")
 PORTAL_CONFIG_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_CONFIG_SHEET", "PortalConfig")
 PORTAL_PAYMENTS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_PAYMENTS_SHEET", "PortalPagos")
+PORTAL_FILES_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_FILES_SHEET", "PortalFiles")
 PORTAL_USERS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_USERS_SHEET", "PortalUsers")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
 SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
@@ -114,7 +115,9 @@ PORTAL_PAYMENT_HEADERS = [
     "updated_at",
     "rate_at_payment",
     "amount_usd_at_payment",
+    "attachment_file_id",
 ]
+PORTAL_FILE_HEADERS = ["file_id", "chunk_index", "chunk_count", "name", "content_type", "data", "created_at"]
 TRANSIENT_SETTING_KEYS = {"sync_status", "debt_sync_local_date", "debt_sync_version"}
 
 
@@ -249,6 +252,10 @@ def send_file(handler, path, content_type):
     if not path.exists():
         return send_json(handler, {"error": "No encontrado"}, 404)
     data = path.read_bytes()
+    return send_bytes(handler, data, content_type)
+
+
+def send_bytes(handler, data, content_type):
     handler.send_response(200)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
@@ -357,21 +364,23 @@ def add_event(con, driver_id, user_id, event_type, notes="", payload=None):
 
 def save_upload(file_info):
     if not file_info or not file_info.get("data"):
-        return None, None, None
+        return None, None, None, None, None
     raw = file_info["data"]
     if "," in raw:
         raw = raw.split(",", 1)[1]
+    raw = "".join(clean_text(raw).split())
     data = base64.b64decode(raw)
     if not data:
-        return None, None, None
+        return None, None, None, None, None
     original = Path(file_info.get("name") or "comprobante").name
     suffix = Path(original).suffix[:12] or ".bin"
-    stored = f"comprobante-{uuid.uuid4().hex}{suffix}"
+    file_id = uuid.uuid4().hex
+    stored = f"comprobante-{file_id}{suffix}"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     target = UPLOAD_DIR / stored
     target.write_bytes(data)
     content_type = file_info.get("type") or mimetypes.guess_type(original)[0] or "application/octet-stream"
-    return str(Path("uploads") / stored), original, content_type
+    return str(Path("uploads") / stored), original, content_type, file_id, raw
 
 
 def get_settings(con):
@@ -1001,7 +1010,74 @@ def payment_backup_row(driver, payment, user=None):
         payment.get("updated_at") or "",
         payment.get("rate_at_payment") or "",
         payment.get("amount_usd_at_payment") or "",
+        payment.get("attachment_file_id") or "",
     ]
+
+
+def backup_attachment_to_sheets(file_id, name, content_type, base64_data):
+    service = google_service()
+    if not service or not file_id or not base64_data:
+        return {"ok": False, "error": "Google Sheets no configurado"}
+    try:
+        ensure_sheet_with_headers(service, PORTAL_FILES_SHEET_NAME, PORTAL_FILE_HEADERS)
+        chunk_size = 40000
+        chunks = [base64_data[index:index + chunk_size] for index in range(0, len(base64_data), chunk_size)]
+        rows = [
+            [file_id, index + 1, len(chunks), name or "comprobante", content_type or "application/octet-stream", chunk, now_iso()]
+            for index, chunk in enumerate(chunks)
+        ]
+        service.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_FILES_SHEET_NAME, "A:G"),
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+        return {"ok": True, "chunks": len(chunks)}
+    except Exception as exc:
+        print(f"No se pudo guardar {PORTAL_FILES_SHEET_NAME}: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
+def read_attachment_from_sheets(file_id):
+    service = google_service()
+    if not service or not file_id:
+        return None
+    try:
+        ensure_sheet_with_headers(service, PORTAL_FILES_SHEET_NAME, PORTAL_FILE_HEADERS)
+        rows = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=sheet_range(PORTAL_FILES_SHEET_NAME, "A2:G20000"),
+        ).execute().get("values", [])
+    except Exception as exc:
+        print(f"No se pudo leer {PORTAL_FILES_SHEET_NAME}: {exc}")
+        return None
+    matches = []
+    for row in rows:
+        if clean_text(row[0] if row else "") != file_id:
+            continue
+        matches.append({
+            "index": int(row[1]) if len(row) > 1 and clean_text(row[1]).isdigit() else 0,
+            "count": int(row[2]) if len(row) > 2 and clean_text(row[2]).isdigit() else 0,
+            "name": row[3] if len(row) > 3 else "comprobante",
+            "content_type": row[4] if len(row) > 4 else "application/octet-stream",
+            "data": row[5] if len(row) > 5 else "",
+        })
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item["index"])
+    chunk_count = matches[0]["count"]
+    if chunk_count and len(matches) != chunk_count:
+        return None
+    try:
+        data = base64.b64decode("".join(item["data"] for item in matches))
+    except Exception:
+        return None
+    return {
+        "data": data,
+        "name": matches[0]["name"],
+        "content_type": matches[0]["content_type"] or "application/octet-stream",
+    }
 
 
 def backup_payment_to_sheets(driver, payment, user=None):
@@ -1140,6 +1216,7 @@ def restore_payment_backups_from_sheets():
                     clean_text(row.get("attachment_path")),
                     clean_text(row.get("attachment_name")),
                     clean_text(row.get("attachment_type")),
+                    clean_text(row.get("attachment_file_id")),
                     clean_text(row.get("payment_status")) or "pago_reportado",
                     clean_text(row.get("alerts_json")) or "[]",
                     clean_text(row.get("internal_notes")),
@@ -1158,7 +1235,7 @@ def restore_payment_backups_from_sheets():
                             rate_at_payment = ?, amount_usd_at_payment = ?,
                             reference = ?, reference_norm = ?, bank = ?, payment_date = ?, payment_method = ?,
                             observations = ?, attachment_path = ?, attachment_name = ?, attachment_type = ?,
-                            status = ?, alerts_json = ?, internal_notes = ?, reconciliation_agent = ?,
+                            attachment_file_id = ?, status = ?, alerts_json = ?, internal_notes = ?, reconciliation_agent = ?,
                             validated_reference = ?, validated_at = ?, created_at = ?, updated_at = ?
                         where backup_key = ?
                         """,
@@ -1170,9 +1247,9 @@ def restore_payment_backups_from_sheets():
                         insert into payments (
                             driver_id, cedula, payment_phone, plate, amount_ves, rate_at_payment, amount_usd_at_payment, reference, reference_norm,
                             bank, payment_date, payment_method, observations, attachment_path, attachment_name,
-                            attachment_type, status, alerts_json, internal_notes, reconciliation_agent,
+                            attachment_type, attachment_file_id, status, alerts_json, internal_notes, reconciliation_agent,
                             validated_reference, validated_at, created_at, updated_at, backup_key
-                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         values,
                     )
@@ -1429,6 +1506,8 @@ def ensure_payment_columns(con):
         con.execute("alter table payments add column rate_at_payment real")
     if "amount_usd_at_payment" not in existing:
         con.execute("alter table payments add column amount_usd_at_payment real")
+    if "attachment_file_id" not in existing:
+        con.execute("alter table payments add column attachment_file_id text")
     if "backup_key" not in existing:
         con.execute("alter table payments add column backup_key text")
     con.execute("update payments set backup_key = lower(hex(randomblob(16))) where backup_key is null or backup_key = ''")
@@ -1535,6 +1614,7 @@ def init_db():
                 attachment_path text,
                 attachment_name text,
                 attachment_type text,
+                attachment_file_id text,
                 status text not null default 'pago_reportado',
                 match_confidence text not null default 'bajo',
                 alerts_json text not null default '[]',
@@ -1667,11 +1747,35 @@ class Handler(BaseHTTPRequestHandler):
             user = require_user(self)
             if user is None:
                 return
-            target = (UPLOAD_DIR / parsed.path.removeprefix("/uploads/")).resolve()
+            filename = Path(parsed.path.removeprefix("/uploads/")).name
+            target = (UPLOAD_DIR / filename).resolve()
             if UPLOAD_DIR.resolve() not in target.parents and target.parent != UPLOAD_DIR.resolve():
                 return send_json(self, {"error": "No encontrado"}, 404)
-            content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            return send_file(self, target, content_type)
+            if target.exists():
+                content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                return send_file(self, target, content_type)
+            attachment_path = str(Path("uploads") / filename)
+            with db() as con:
+                payment = con.execute(
+                    """
+                    select attachment_file_id, attachment_name, attachment_type
+                    from payments
+                    where attachment_path = ?
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (attachment_path,),
+                ).fetchone()
+            if payment and payment["attachment_file_id"]:
+                restored = read_attachment_from_sheets(payment["attachment_file_id"])
+                if restored:
+                    try:
+                        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(restored["data"])
+                    except Exception:
+                        pass
+                    return send_bytes(self, restored["data"], restored["content_type"] or payment["attachment_type"] or "application/octet-stream")
+            return send_json(self, {"error": "No encontrado"}, 404)
         if parsed.path == "/api/public/config":
             with db() as con:
                 return send_json(self, {"settings": get_settings(con)})
@@ -1773,7 +1877,7 @@ class Handler(BaseHTTPRequestHandler):
                                 },
                                 409,
                             )
-                        attachment_path, attachment_name, attachment_type = save_upload(body.get("attachment_file"))
+                        attachment_path, attachment_name, attachment_type, attachment_file_id, attachment_base64 = save_upload(body.get("attachment_file"))
                         timestamp = now_iso()
                         backup_key = uuid.uuid4().hex
                         rate_at_payment = money(driver["rate"])
@@ -1784,8 +1888,8 @@ class Handler(BaseHTTPRequestHandler):
                             insert into payments (
                                 driver_id, cedula, payment_phone, plate, amount_ves, rate_at_payment, amount_usd_at_payment, reference, reference_norm,
                                 bank, payment_date, payment_method, observations, attachment_path, attachment_name,
-                                attachment_type, status, alerts_json, backup_key, created_at, updated_at
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
+                                attachment_type, attachment_file_id, status, alerts_json, backup_key, created_at, updated_at
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pago_reportado', ?, ?, ?, ?)
                             """,
                             (
                                 driver["id"],
@@ -1804,6 +1908,7 @@ class Handler(BaseHTTPRequestHandler):
                                 attachment_path,
                                 attachment_name,
                                 attachment_type,
+                                attachment_file_id,
                                 json.dumps(alerts, ensure_ascii=False),
                                 backup_key,
                                 timestamp,
@@ -1814,6 +1919,7 @@ class Handler(BaseHTTPRequestHandler):
                         add_event(con, driver["id"], None, "submission_formulario", "Pago reportado por conductor", {"payment_id": payment_id, "alerts": alerts})
                         updated_driver = row_to_dict(con.execute("select * from drivers where id = ?", (driver["id"],)).fetchone())
                         updated_payment = row_to_dict(con.execute("select * from payments where id = ?", (payment_id,)).fetchone())
+                        backup_attachment_to_sheets(attachment_file_id, attachment_name, attachment_type, attachment_base64)
                         backup_payment_to_sheets(updated_driver, updated_payment)
                 return send_json(self, {"ok": True, "message": "Pago reportado. El equipo de conciliacion lo revisara."}, 201)
 
