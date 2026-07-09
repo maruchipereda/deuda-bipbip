@@ -6,6 +6,7 @@ const state = {
   cases: [],
   currentBucket: "pendientes",
   currentView: "cases",
+  statusFilter: "",
   currentDriver: null,
   lookupPhone: "",
 };
@@ -279,6 +280,11 @@ async function loadCases() {
   renderCases();
 }
 
+function filteredCases() {
+  if (!state.statusFilter) return state.cases;
+  return state.cases.filter((item) => item.status === state.statusFilter);
+}
+
 function renderMetrics() {
   const counts = state.cases.reduce((acc, item) => {
     acc[item.status] = (acc[item.status] || 0) + 1;
@@ -293,7 +299,8 @@ function renderMetrics() {
 }
 
 function renderCases() {
-  if (!state.cases.length) {
+  const cases = filteredCases();
+  if (!cases.length) {
     $("#caseTable").innerHTML = `<div class="empty">No hay casos en esta bandeja.</div>`;
     return;
   }
@@ -301,7 +308,7 @@ function renderCases() {
     <div class="table-head">
       <span>Conductor</span><span>Deuda</span><span>Pago</span><span>Estado</span><span></span>
     </div>
-    ${state.cases.map(caseRow).join("")}
+    ${cases.map(caseRow).join("")}
   `;
 }
 
@@ -345,6 +352,15 @@ function renderCaseDetail(item) {
   const alerts = parseAlerts(payment.alerts);
   const canConciliate = ["master", "admin", "conciliacion"].includes(state.user.role);
   const canUnlock = ["master", "admin", "operaciones"].includes(state.user.role);
+  const canDelete = state.user.role === "master";
+  const statusOptions = [
+    ["en_validacion", "En validacion"],
+    ["conciliado", "Conciliado"],
+    ["revision_manual", "Revision manual"],
+    ["rechazado", "Rechazado"],
+    ["fraudulento", "Fraude"],
+    ["duplicado", "Duplicado"],
+  ];
   return `
     <section class="detail-grid">
       <div><span>Nombre</span><strong>${escapeHtml(item.name || "-")}</strong></div>
@@ -388,27 +404,31 @@ function renderCaseDetail(item) {
     ${canConciliate && payment.id ? `
       <form class="detail-block action-form" data-status-form="${item.id}">
         <h3>Conciliacion</h3>
+        <div class="status-control-head">
+          <span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status_label || item.status)}</span>
+        </div>
         <label>Agente
           <input name="reconciliation_agent" value="${escapeHtml(payment.reconciliation_agent || state.user.name || "")}" required />
         </label>
         <label>Referencia conciliada
           <input name="validated_reference" value="${escapeHtml(payment.validated_reference || payment.reference || "")}" required />
         </label>
+        <label>Cambiar estado
+          <select name="status" required>
+            ${statusOptions.map(([value, label]) => `<option value="${value}" ${item.status === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
         <label>Notas internas
           <textarea name="notes" rows="3">${escapeHtml(payment.internal_notes || "")}</textarea>
         </label>
-        <div class="action-row">
-          <button type="button" data-status-action="en_validacion">En validacion</button>
-          <button type="button" data-status-action="conciliado"><svg><use href="#i-check"></use></svg>Conciliado</button>
-          <button class="secondary" type="button" data-status-action="revision_manual">Revision manual</button>
-          <button class="secondary" type="button" data-status-action="rechazado"><svg><use href="#i-x"></use></svg>Rechazar</button>
-          <button class="secondary" type="button" data-status-action="fraudulento">Fraude</button>
+        <div class="action-row compact-actions">
+          <button type="button" data-status-save><svg><use href="#i-check"></use></svg>Guardar estado</button>
         </div>
       </form>
     ` : ""}
-    ${state.user.role === "master" ? `
+    ${canDelete ? `
       <section class="detail-block danger-zone">
-        <h3>Master</h3>
+        <h3>Administracion</h3>
         <p class="notes">Borra este caso y sus reportes de prueba de la base interna.</p>
         <button class="secondary danger-action" type="button" data-delete-case="${item.id}">Borrar caso</button>
       </section>
@@ -446,10 +466,10 @@ function labelAlert(alert) {
   return labels[alert] || alert;
 }
 
-async function updateCaseStatus(form, status) {
+async function updateCaseStatus(form) {
   const id = form.dataset.statusForm;
   const payload = {
-    status,
+    status: form.elements.status.value,
     validated_reference: form.elements.validated_reference.value.trim(),
     reconciliation_agent: form.elements.reconciliation_agent?.value.trim() || "",
     notes: form.elements.notes.value.trim(),
@@ -671,6 +691,10 @@ function bindEvents() {
     window.clearTimeout(window.searchTimer);
     window.searchTimer = window.setTimeout(loadCases, 250);
   });
+  $("#statusFilter").addEventListener("change", (event) => {
+    state.statusFilter = event.target.value;
+    renderCases();
+  });
   $("#caseTable").addEventListener("click", (event) => {
     const button = event.target.closest("[data-open-case]");
     if (button) openCase(button.dataset.openCase);
@@ -678,14 +702,20 @@ function bindEvents() {
   $("#caseDetail").addEventListener("click", (event) => {
     const previewButton = event.target.closest("[data-preview-receipt]");
     if (previewButton) openReceiptPreview(previewButton.dataset.previewReceipt);
-    const statusButton = event.target.closest("[data-status-action]");
-    if (statusButton) updateCaseStatus(statusButton.closest("form"), statusButton.dataset.statusAction);
+    const statusButton = event.target.closest("[data-status-save]");
+    if (statusButton) updateCaseStatus(statusButton.closest("form"));
     const followupButton = event.target.closest("[data-followup-action]");
     if (followupButton) addFollowup(followupButton.dataset.followupCase, followupButton.dataset.followupAction);
     const unlockButton = event.target.closest("[data-unlock-case]");
     if (unlockButton) unlockCase(unlockButton.dataset.unlockCase);
     const deleteButton = event.target.closest("[data-delete-case]");
     if (deleteButton) deleteCase(deleteButton.dataset.deleteCase);
+  });
+  $("#caseDetail").addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-status-form]");
+    if (!form) return;
+    event.preventDefault();
+    updateCaseStatus(form);
   });
   $$("[data-close-modal]").forEach((node) => node.addEventListener("click", () => $("#caseModal").classList.add("hidden")));
   $$("[data-close-user]").forEach((node) => node.addEventListener("click", () => $("#userModal").classList.add("hidden")));

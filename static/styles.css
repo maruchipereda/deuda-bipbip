@@ -521,6 +521,15 @@ a {
   font-weight: 850;
 }
 
+.case-filters {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.case-filters label {
+  width: min(260px, 100%);
+}
+
 .case-table {
   display: grid;
   gap: 8px;
@@ -703,6 +712,16 @@ a {
 .detail-block {
   display: grid;
   gap: 12px;
+}
+
+.status-control-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.compact-actions {
+  justify-content: flex-start;
 }
 
 .notes {

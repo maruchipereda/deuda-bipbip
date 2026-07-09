@@ -187,6 +187,22 @@
 
         <section id="casesView" class="admin-view active">
           <div id="metrics" class="metrics"></div>
+          <div class="case-filters">
+            <label>Status
+              <select id="statusFilter">
+                <option value="">Todos</option>
+                <option value="pendiente_pago">Pendiente de pago</option>
+                <option value="pago_reportado">Pago reportado</option>
+                <option value="en_validacion">En validacion</option>
+                <option value="conciliado">Conciliado</option>
+                <option value="revision_manual">Revision manual</option>
+                <option value="rechazado">Rechazado</option>
+                <option value="duplicado">Duplicado</option>
+                <option value="fraudulento">Fraude</option>
+                <option value="desbloqueado">Desbloqueado</option>
+              </select>
+            </label>
+          </div>
           <div id="caseTable" class="case-table"></div>
         </section>
 
