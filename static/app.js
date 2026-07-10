@@ -371,7 +371,7 @@ function caseRow(item) {
       </div>
       <div>
         <strong>${money(item.debt_ves, "VES")}</strong>
-        <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.missing_after_reports_usd, "USD")} / ${money(item.missing_after_reports_ves, "VES")}</small>
+        <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.pending_usd, "USD")} / ${money(item.pending_ves, "VES")}</small>
         ${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : ""}
       </div>
       <div>
@@ -420,7 +420,7 @@ function renderCaseDetail(item) {
       <div><span>Deuda</span><strong>${money(item.debt_ves, "VES")}</strong></div>
       <div><span>Abonado conciliado</span><strong>${money(item.paid_usd, "USD")} / ${money(item.paid_ves, "VES")}</strong></div>
       <div><span>Reportado por revisar</span><strong>${money(item.review_usd, "USD")} / ${money(item.review_ves, "VES")}</strong></div>
-      <div><span>Falta por cubrir</span><strong>${money(item.missing_after_reports_usd, "USD")} / ${money(item.missing_after_reports_ves, "VES")}</strong></div>
+      <div><span>Falta por cubrir</span><strong>${money(item.pending_usd, "USD")} / ${money(item.pending_ves, "VES")}</strong></div>
       <div><span>Senal</span><strong>${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : "Aun falta pago"}</strong></div>
     </section>
     <section class="detail-block">
