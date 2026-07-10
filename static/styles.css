@@ -519,7 +519,7 @@ a {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
 }
 
@@ -563,7 +563,7 @@ a {
 .summary-head,
 .summary-row {
   display: grid;
-  grid-template-columns: 1.2fr 0.6fr 1fr 1fr 1fr;
+  grid-template-columns: 1.2fr 0.55fr 1fr 1fr 1fr 1fr;
   gap: 12px;
   align-items: center;
 }
@@ -635,6 +635,11 @@ a {
 .status.pago_parcial {
   background: #e9f0ff;
   color: var(--blue);
+}
+
+.status.billetera_bipbip {
+  background: #fff3bf;
+  color: #8a5a00;
 }
 
 .status.conciliado {

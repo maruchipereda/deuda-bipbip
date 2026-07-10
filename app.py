@@ -41,6 +41,7 @@ CASE_STATUSES = {
     "pago_reportado": "Pago reportado",
     "en_validacion": "En validacion",
     "pago_parcial": "Pago parcial",
+    "billetera_bipbip": "Billetera BipBip",
     "conciliado": "Conciliado",
     "rechazado": "Rechazado",
     "duplicado": "Duplicado / conflicto",
@@ -53,6 +54,7 @@ BUCKETS = {
     "pendientes": ["pendiente_pago"],
     "reportados": ["pago_reportado"],
     "validacion": ["en_validacion"],
+    "billetera": ["billetera_bipbip"],
     "conciliados": ["conciliado"],
     "rechazados": ["rechazado"],
     "duplicados": ["duplicado", "fraudulento"],
@@ -639,14 +641,21 @@ def summary_by_status(user):
             select drivers.status,
                    count(*) as case_count,
                    coalesce(sum(drivers.debt_usd), 0) as debt_usd,
-                   coalesce(sum(paid.paid_usd), 0) as paid_usd
+                   coalesce(sum(status_amount.amount_ves), 0) as amount_ves,
+                   coalesce(sum(paid.paid_usd), 0) as paid_usd,
+                   coalesce(sum(paid.paid_ves), 0) as paid_ves
             from drivers
             left join (
-                select driver_id, sum(amount_usd_at_payment) as paid_usd
+                select driver_id, sum(amount_usd_at_payment) as paid_usd, sum(amount_ves) as paid_ves
                 from payments
                 where status in ('pago_parcial', 'conciliado')
                 group by driver_id
             ) paid on paid.driver_id = drivers.id
+            left join (
+                select driver_id, status, sum(amount_ves) as amount_ves
+                from payments
+                group by driver_id, status
+            ) status_amount on status_amount.driver_id = drivers.id and status_amount.status = drivers.status
             {where}
             group by drivers.status
             order by drivers.status
@@ -654,23 +663,29 @@ def summary_by_status(user):
             params,
         ).fetchall()
     summary = []
-    totals = {"case_count": 0, "debt_usd": 0.0, "paid_usd": 0.0, "pending_usd": 0.0}
+    totals = {"case_count": 0, "debt_usd": 0.0, "amount_ves": 0.0, "paid_usd": 0.0, "paid_ves": 0.0, "pending_usd": 0.0}
     for row in rows:
         debt_usd = money(row["debt_usd"])
+        amount_ves = money(row["amount_ves"])
         paid_usd = money(row["paid_usd"])
+        paid_ves = money(row["paid_ves"])
         pending_usd = max(0.0, debt_usd - paid_usd)
         item = {
             "status": row["status"],
             "status_label": CASE_STATUSES.get(row["status"], row["status"]),
             "case_count": int(row["case_count"] or 0),
             "debt_usd": debt_usd,
+            "amount_ves": amount_ves,
             "paid_usd": paid_usd,
+            "paid_ves": paid_ves,
             "pending_usd": pending_usd,
         }
         summary.append(item)
         totals["case_count"] += item["case_count"]
         totals["debt_usd"] += debt_usd
+        totals["amount_ves"] += amount_ves
         totals["paid_usd"] += paid_usd
+        totals["paid_ves"] += paid_ves
         totals["pending_usd"] += pending_usd
     return {"rows": summary, "totals": totals}
 

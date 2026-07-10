@@ -303,6 +303,7 @@ function renderMetrics() {
   $("#metrics").innerHTML = [
     ["Casos", state.cases.length],
     ["Reportados", counts.pago_reportado || 0],
+    ["Billetera Bs.", money(state.cases.filter((item) => item.status === "billetera_bipbip").reduce((sum, item) => sum + Number(item.payment?.amount_ves || 0), 0), "VES")],
     ["Conciliados", counts.conciliado || 0],
     ["Desbloqueados", counts.desbloqueado || 0],
   ].map(([label, value]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join("");
@@ -334,6 +335,7 @@ function renderSummary() {
   $("#summaryMetrics").innerHTML = [
     ["Casos", totals.case_count || 0],
     ["Deuda USD", money(totals.debt_usd, "USD")],
+    ["Monto Bs.", money(totals.amount_ves, "VES")],
     ["Abonado USD", money(totals.paid_usd, "USD")],
     ["Pendiente USD", money(totals.pending_usd, "USD")],
   ].map(([label, value]) => `<div><strong>${escapeHtml(value)}</strong><span>${label}</span></div>`).join("");
@@ -343,13 +345,14 @@ function renderSummary() {
   }
   $("#summaryTable").innerHTML = `
     <div class="summary-head">
-      <span>Status</span><span>Casos</span><span>Deuda USD</span><span>Abonado USD</span><span>Pendiente USD</span>
+      <span>Status</span><span>Casos</span><span>Deuda USD</span><span>Monto Bs.</span><span>Abonado USD</span><span>Pendiente USD</span>
     </div>
     ${summary.rows.map((row) => `
       <article class="summary-row">
         <span><span class="status ${escapeHtml(row.status)}">${escapeHtml(row.status_label || row.status)}</span></span>
         <strong>${Number(row.case_count || 0)}</strong>
         <strong>${money(row.debt_usd, "USD")}</strong>
+        <strong>${money(row.amount_ves, "VES")}</strong>
         <strong>${money(row.paid_usd, "USD")}</strong>
         <strong>${money(row.pending_usd, "USD")}</strong>
       </article>
@@ -402,6 +405,7 @@ function renderCaseDetail(item) {
   const statusOptions = [
     ["en_validacion", "En validacion"],
     ["pago_parcial", "Pago parcial"],
+    ["billetera_bipbip", "Billetera BipBip"],
     ["conciliado", "Conciliado"],
     ["rechazado", "Rechazado"],
     ["fraudulento", "Fraude"],
