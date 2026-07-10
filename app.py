@@ -380,7 +380,10 @@ def save_upload(file_info):
     stored = f"comprobante-{file_id}{suffix}"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     target = UPLOAD_DIR / stored
-    target.write_bytes(data)
+    try:
+        target.write_bytes(data)
+    except Exception as exc:
+        print(f"No se pudo guardar comprobante local {target}: {exc}")
     content_type = file_info.get("type") or mimetypes.guess_type(original)[0] or "application/octet-stream"
     return str(Path("uploads") / stored), original, content_type, file_id, raw
 
@@ -1885,6 +1888,7 @@ class Handler(BaseHTTPRequestHandler):
                     return send_json(self, {"error": "Todos los campos son obligatorios.", "missing": missing}, 400)
                 with DB_LOCK:
                     with db() as con:
+                        ensure_payment_columns(con)
                         lookup_cedula = body.get("lookup_cedula") or body.get("cedula")
                         lookup_phone = body.get("registered_phone") or body.get("lookup_phone") or body.get("payment_phone")
                         driver = find_driver(con, lookup_cedula, lookup_phone)

@@ -75,7 +75,7 @@ async function api(path, options = {}) {
       state.auth = null;
       showPublic();
     }
-    throw new Error(payload.error || payload.details || "Request fallido");
+    throw new Error(payload.details || payload.error || "Request fallido");
   }
   return payload;
 }
