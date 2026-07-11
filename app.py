@@ -477,6 +477,9 @@ def public_driver(row, include_events=False):
         return None
     rate = money(data.get("rate"))
     debt_usd = money(data.get("debt_usd"))
+    stored_debt_ves = money(data.get("debt_ves"))
+    if rate <= 0 and debt_usd > 0 and stored_debt_ves > 0:
+        rate = stored_debt_ves / debt_usd
     paid_usd = money(data.get("paid_usd"))
     review_usd = money(data.get("review_usd"))
     coverage_usd = paid_usd + review_usd
@@ -488,7 +491,7 @@ def public_driver(row, include_events=False):
     missing_after_reports_ves = missing_after_reports_usd * rate
     coverage_ves = paid_ves + review_ves
     data["debt_usd"] = money(data.get("debt_usd"))
-    data["debt_ves"] = debt_usd * rate
+    data["debt_ves"] = stored_debt_ves if stored_debt_ves > 0 else debt_usd * rate
     data["rate"] = rate
     data["paid_ves"] = paid_ves
     data["paid_usd"] = paid_usd
@@ -708,6 +711,29 @@ def find_driver(con, cedula, phone):
     ).fetchone()
 
 
+def infer_rate_from_debt(debt_usd, debt_ves):
+    debt_usd = money(debt_usd)
+    debt_ves = money(debt_ves)
+    if debt_usd <= 0 or debt_ves <= 0:
+        return 0.0
+    return debt_ves / debt_usd
+
+
+def latest_nonzero_rate(con):
+    row = con.execute(
+        """
+        select rate, debt_usd, debt_ves
+        from drivers
+        where rate > 0 or (debt_usd > 0 and debt_ves > 0)
+        order by updated_at desc
+        limit 1
+        """
+    ).fetchone()
+    if not row:
+        return 0.0
+    return money(row["rate"]) or infer_rate_from_debt(row["debt_usd"], row["debt_ves"])
+
+
 def upsert_driver(con, payload, source="manual"):
     cedula = clean_text(payload.get("cedula"))
     phone = clean_text(payload.get("phone"))
@@ -716,7 +742,18 @@ def upsert_driver(con, payload, source="manual"):
     if not cedula_norm or not phone_norm:
         raise ValueError("Cedula y telefono son obligatorios")
     timestamp = now_iso()
-    existing = con.execute("select id from drivers where cedula_norm = ?", (cedula_norm,)).fetchone()
+    existing = con.execute("select * from drivers where cedula_norm = ?", (cedula_norm,)).fetchone()
+    debt_usd = money(payload.get("debt_usd"))
+    rate = money(payload.get("rate"))
+    debt_ves = money(payload.get("debt_ves"))
+    if rate <= 0:
+        rate = infer_rate_from_debt(debt_usd, debt_ves)
+    if existing and rate <= 0:
+        rate = money(existing["rate"])
+    if debt_ves <= 0 and debt_usd > 0 and rate > 0:
+        debt_ves = debt_usd * rate
+    if existing and debt_ves <= 0 and money(existing["debt_ves"]) > 0:
+        debt_ves = money(existing["debt_ves"])
     values = (
         clean_text(payload.get("name")),
         cedula,
@@ -725,9 +762,9 @@ def upsert_driver(con, payload, source="manual"):
         phone_norm,
         clean_text(payload.get("plate")).upper(),
         clean_text(payload.get("driver_external_id")),
-        money(payload.get("debt_usd")),
-        money(payload.get("rate")),
-        money(payload.get("debt_ves")),
+        debt_usd,
+        rate,
+        debt_ves,
         source,
         timestamp,
     )
@@ -1352,19 +1389,60 @@ def sync_debts_from_sheets(force=False):
     idx_ves = 4
     idx_plate = header_index(headers, ["placa"], 5)
     idx_driver = header_index(headers, ["driver id", "rider id", "id"], 6)
+    parsed_rows = []
+    rate_candidates = []
+    for raw in values[1:]:
+        if len(raw) <= max(idx_cedula, idx_phone, idx_usd, idx_ves):
+            continue
+        cedula = clean_text(raw[idx_cedula] if idx_cedula < len(raw) else "")
+        phone = clean_text(raw[idx_phone] if idx_phone < len(raw) else "")
+        if not cedula or not phone:
+            continue
+        debt_usd = parse_money(raw[idx_usd] if idx_usd < len(raw) else 0)
+        debt_ves = parse_money(raw[idx_ves] if idx_ves < len(raw) else 0)
+        row_rate = infer_rate_from_debt(debt_usd, debt_ves)
+        if row_rate > 0:
+            rate_candidates.append(row_rate)
+        parsed_rows.append(
+            {
+                "raw": raw,
+                "cedula": cedula,
+                "phone": phone,
+                "debt_usd": debt_usd,
+                "debt_ves": debt_ves,
+                "row_rate": row_rate,
+            }
+        )
+    inferred_sheet_rate = 0.0
+    if rate_candidates:
+        sorted_rates = sorted(rate_candidates)
+        inferred_sheet_rate = sorted_rates[len(sorted_rates) // 2]
     imported = 0
+    skipped = 0
+    applied_rate = sheet_rate or inferred_sheet_rate
     with DB_LOCK:
         with db() as con:
-            for raw in values[1:]:
-                if len(raw) <= max(idx_cedula, idx_phone, idx_usd, idx_ves):
+            stored_rate = latest_nonzero_rate(con)
+            fallback_rate = sheet_rate or inferred_sheet_rate or stored_rate
+            applied_rate = fallback_rate
+            rows_need_rate = any(row["debt_usd"] > 0 for row in parsed_rows)
+            if rows_need_rate and fallback_rate <= 0:
+                return {
+                    "ok": False,
+                    "error": "No consegui una tasa valida en H2 ni en la columna E/D. No se sincronizo para no pisar los montos en Bs. con cero.",
+                }
+            for item in parsed_rows:
+                raw = item["raw"]
+                cedula = item["cedula"]
+                phone = item["phone"]
+                debt_usd = item["debt_usd"]
+                debt_ves = item["debt_ves"]
+                rate = sheet_rate or item["row_rate"] or stored_rate or inferred_sheet_rate
+                if debt_ves <= 0 and debt_usd > 0 and rate > 0:
+                    debt_ves = debt_usd * rate
+                if debt_usd > 0 and rate <= 0:
+                    skipped += 1
                     continue
-                cedula = clean_text(raw[idx_cedula] if idx_cedula < len(raw) else "")
-                phone = clean_text(raw[idx_phone] if idx_phone < len(raw) else "")
-                if not cedula or not phone:
-                    continue
-                debt_usd = parse_money(raw[idx_usd] if idx_usd < len(raw) else 0)
-                debt_ves = parse_money(raw[idx_ves] if idx_ves < len(raw) else 0)
-                rate = sheet_rate or (debt_ves / debt_usd if debt_usd else 0)
                 upsert_driver(
                     con,
                     {
@@ -1380,10 +1458,13 @@ def sync_debts_from_sheets(force=False):
                     "google_sheets",
                 )
                 imported += 1
-            set_setting(con, "sync_status", f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()}")
+            status = f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()} con tasa {money(fallback_rate)}"
+            if skipped:
+                status += f". Omitidos {skipped} por falta de tasa valida"
+            set_setting(con, "sync_status", status)
             set_setting(con, "debt_sync_local_date", today)
             set_setting(con, "debt_sync_version", SYNC_VERSION)
-    return {"ok": True, "imported": imported, "date": today}
+    return {"ok": True, "imported": imported, "skipped_rows": skipped, "rate": money(applied_rate), "date": today}
 
 
 def append_conciliated_to_sheets(driver, payment, user):
