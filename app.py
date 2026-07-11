@@ -32,7 +32,7 @@ PORTAL_PAYMENTS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_PAYMENTS_SHEET", "Por
 PORTAL_FILES_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_FILES_SHEET", "PortalFiles")
 PORTAL_USERS_SHEET_NAME = os.environ.get("GOOGLE_PORTAL_USERS_SHEET", "PortalUsers")
 SYNC_TIMEZONE = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "America/Caracas"))
-SYNC_VERSION = "2026-07-09-b-phone-c-cedula-money"
+SYNC_VERSION = "2026-07-11-require-valid-sheet-rate"
 AUTH_TOKENS = {}
 DB_LOCK = threading.Lock()
 
@@ -1422,14 +1422,14 @@ def sync_debts_from_sheets(force=False):
     applied_rate = sheet_rate or inferred_sheet_rate
     with DB_LOCK:
         with db() as con:
+            sheet_source_rate = sheet_rate or inferred_sheet_rate
             stored_rate = latest_nonzero_rate(con)
-            fallback_rate = sheet_rate or inferred_sheet_rate or stored_rate
-            applied_rate = fallback_rate
+            applied_rate = sheet_source_rate
             rows_need_rate = any(row["debt_usd"] > 0 for row in parsed_rows)
-            if rows_need_rate and fallback_rate <= 0:
+            if rows_need_rate and sheet_source_rate <= 0:
                 return {
                     "ok": False,
-                    "error": "No consegui una tasa valida en H2 ni en la columna E/D. No se sincronizo para no pisar los montos en Bs. con cero.",
+                    "error": "No consegui una tasa valida en H2 ni en la columna E/D. No se sincronizo para no pisar los montos en Bs. con cero ni cerrar el dia con una tasa vieja.",
                 }
             for item in parsed_rows:
                 raw = item["raw"]
@@ -1437,7 +1437,7 @@ def sync_debts_from_sheets(force=False):
                 phone = item["phone"]
                 debt_usd = item["debt_usd"]
                 debt_ves = item["debt_ves"]
-                rate = sheet_rate or item["row_rate"] or stored_rate or inferred_sheet_rate
+                rate = sheet_rate or item["row_rate"] or inferred_sheet_rate or stored_rate
                 if debt_ves <= 0 and debt_usd > 0 and rate > 0:
                     debt_ves = debt_usd * rate
                 if debt_usd > 0 and rate <= 0:
@@ -1458,7 +1458,7 @@ def sync_debts_from_sheets(force=False):
                     "google_sheets",
                 )
                 imported += 1
-            status = f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()} con tasa {money(fallback_rate)}"
+            status = f"Sincronizado {imported} deudores desde Google Sheets en {now_iso()} con tasa {money(sheet_source_rate)}"
             if skipped:
                 status += f". Omitidos {skipped} por falta de tasa valida"
             set_setting(con, "sync_status", status)
