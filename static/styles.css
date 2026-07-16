@@ -793,7 +793,7 @@ a {
 
 .payment-history-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid var(--line);
@@ -812,6 +812,18 @@ a {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.compact-file-link {
+  min-height: 34px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.no-file {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .status-control-head {
@@ -990,7 +1002,8 @@ a {
   }
 
   .case-row,
-  .user-row {
+  .user-row,
+  .payment-history-row {
     grid-template-columns: 1fr;
   }
 

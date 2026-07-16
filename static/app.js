@@ -436,7 +436,7 @@ function renderCaseDetail(item) {
     <section class="detail-block">
       <h3>${payments.length > 1 ? "Pagos registrados" : "Pago reportado"}</h3>
       ${payment.id ? `
-        ${payments.length > 1 ? `<p class="notes">Falta por cubrir usa la suma de estos pagos, no solo el ultimo.</p>` : ""}
+        ${payments.length > 1 ? `<p class="notes">Falta por cubrir descuenta los pagos confirmados. Los pagos en revision aparecen como reportados por revisar hasta que se validen.</p>` : ""}
         ${payments.length > 1 ? `<div class="payment-list">${payments.map(paymentHistoryRow).join("")}</div>` : ""}
         <div class="detail-grid">
           <div><span>Referencia</span><strong>${escapeHtml(payment.reference || "-")}</strong></div>
@@ -530,6 +530,9 @@ function renderCaseDetail(item) {
 }
 
 function paymentHistoryRow(payment) {
+  const receipt = payment.attachment_url
+    ? `<button class="file-link compact-file-link" type="button" data-preview-receipt="${escapeHtml(payment.attachment_url)}">Ver comprobante</button>`
+    : `<span class="no-file">Sin comprobante</span>`;
   return `
     <article class="payment-history-row">
       <div>
@@ -541,6 +544,7 @@ function paymentHistoryRow(payment) {
         <span>${escapeHtml(payment.reconciliation_agent || "Sin agente")}</span>
       </div>
       <span class="status ${escapeHtml(payment.status || "")}">${escapeHtml(state.statuses?.[payment.status] || payment.status || "-")}</span>
+      ${receipt}
     </article>
   `;
 }
