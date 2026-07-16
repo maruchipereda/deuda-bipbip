@@ -81,6 +81,7 @@ async function api(path, options = {}) {
 }
 
 function readFile(input) {
+  if (!input) return Promise.resolve(null);
   const file = input.files?.[0];
   if (!file) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
@@ -412,7 +413,10 @@ function renderCaseDetail(item) {
   const canConciliate = ["master", "admin", "conciliacion"].includes(state.user.role);
   const canUnlock = ["master", "admin", "operaciones"].includes(state.user.role);
   const canDelete = state.user.role === "master";
+  const canChangeStatus = canConciliate && (payment.id || state.user.role === "master");
   const statusOptions = [
+    ["pendiente_pago", "Pendiente de pago"],
+    ["pago_reportado", "Pago reportado"],
     ["en_validacion", "En validacion"],
     ["pago_parcial", "Pago parcial"],
     ["billetera_bipbip", "Billetera BipBip"],
@@ -468,15 +472,16 @@ function renderCaseDetail(item) {
         <button class="secondary" type="button" data-followup-action="nota" data-followup-case="${item.id}">Guardar nota</button>
       </div>
     </section>
-    ${canConciliate && payment.id ? `
+    ${canChangeStatus ? `
       <form class="detail-block action-form" data-status-form="${item.id}">
-        <h3>Conciliacion</h3>
+        <h3>${payment.id ? "Conciliacion" : "Cambiar estado"}</h3>
         <div class="status-control-head">
           <span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status_label || item.status)}</span>
         </div>
         <label>Agente
           <input name="reconciliation_agent" value="${escapeHtml(payment.reconciliation_agent || state.user.name || "")}" required />
         </label>
+        ${payment.id ? `
         <label>Referencia conciliada
           <input name="validated_reference" value="${escapeHtml(payment.validated_reference || payment.reference || "")}" required />
         </label>
@@ -486,6 +491,7 @@ function renderCaseDetail(item) {
         <label>Adjuntar / reemplazar comprobante
           <input name="attachment_file" type="file" accept="image/*,application/pdf" />
         </label>
+        ` : `<p class="notes">Como master puedes cambiar el estado aunque el conductor no haya reportado pago. Si marcas Billetera BipBip, se crea un registro automatico por el total de la deuda.</p>`}
         <label>Cambiar estado
           <select name="status" required>
             ${statusOptions.map(([value, label]) => `<option value="${value}" ${item.status === value ? "selected" : ""}>${label}</option>`).join("")}
@@ -565,7 +571,7 @@ async function updateCaseStatus(form) {
   const attachmentFile = await readFile(form.elements.attachment_file);
   const payload = {
     status: form.elements.status.value,
-    validated_reference: form.elements.validated_reference.value.trim(),
+    validated_reference: form.elements.validated_reference?.value.trim() || "",
     validated_amount_ves: form.elements.validated_amount_ves?.value.trim() || "",
     reconciliation_agent: form.elements.reconciliation_agent?.value.trim() || "",
     notes: form.elements.notes.value.trim(),
