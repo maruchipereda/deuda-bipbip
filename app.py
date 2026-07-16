@@ -2278,9 +2278,54 @@ class Handler(BaseHTTPRequestHandler):
                                     payment["id"],
                                 ),
                             )
+                        elif status == "billetera_bipbip":
+                            rate_at_payment = money(driver["rate"])
+                            validated_amount = parse_money(validated_amount_raw) if validated_amount_raw else money(driver["debt_ves"])
+                            if validated_amount <= 0 and money(driver["debt_usd"]) > 0 and rate_at_payment > 0:
+                                validated_amount = money(driver["debt_usd"]) * rate_at_payment
+                            if validated_amount <= 0:
+                                return send_json(self, {"error": "No pude calcular el monto total para Billetera BipBip."}, 400)
+                            amount_usd_at_payment = money(driver["debt_usd"]) if not validated_amount_raw else (validated_amount / rate_at_payment if rate_at_payment else 0.0)
+                            auto_reference = validated_reference or f"BILLETERA-BIPBIP-{driver['driver_external_id'] or driver['cedula']}"
+                            backup_key = uuid.uuid4().hex
+                            con.execute(
+                                """
+                                insert into payments (
+                                    driver_id, cedula, payment_phone, plate, amount_ves, rate_at_payment, amount_usd_at_payment,
+                                    reference, reference_norm, bank, payment_date, payment_method, observations,
+                                    attachment_path, attachment_name, attachment_type, attachment_file_id,
+                                    status, alerts_json, internal_notes, reconciliation_agent, validated_reference,
+                                    validated_by, validated_at, backup_key, created_at, updated_at
+                                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    driver["id"],
+                                    driver["cedula"],
+                                    driver["phone"],
+                                    driver["plate"],
+                                    validated_amount,
+                                    rate_at_payment,
+                                    amount_usd_at_payment,
+                                    auto_reference,
+                                    normalize_reference(auto_reference),
+                                    "Billetera BipBip",
+                                    local_sync_date(),
+                                    "billetera_bipbip",
+                                    notes,
+                                    status,
+                                    notes,
+                                    reconciliation_agent,
+                                    auto_reference,
+                                    user["id"],
+                                    timestamp,
+                                    backup_key,
+                                    timestamp,
+                                    timestamp,
+                                ),
+                            )
                         con.execute("update drivers set status = ?, updated_at = ? where id = ?", (status, timestamp, driver_id))
                         event_payload = {"status": status}
-                        if payment:
+                        if payment or status == "billetera_bipbip":
                             event_payload["monto_validado_ves"] = validated_amount
                             event_payload["monto_validado_usd"] = amount_usd_at_payment
                         add_event(con, driver_id, user["id"], "cambio_estado", f"Estado cambiado a {CASE_STATUSES[status]}. {notes}", event_payload)
