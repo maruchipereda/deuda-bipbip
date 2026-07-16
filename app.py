@@ -61,7 +61,8 @@ BUCKETS = {
     "desbloqueo": ["conciliado", "desbloqueado"],
 }
 
-PAID_PAYMENT_STATUSES = ("pago_parcial", "conciliado")
+PAID_PAYMENT_STATUSES = ("pago_parcial", "conciliado", "billetera_bipbip")
+PAID_PAYMENT_STATUSES_SQL = ", ".join(f"'{status}'" for status in PAID_PAYMENT_STATUSES)
 
 CONCILIATED_HEADERS = [
     "nombre",
@@ -481,15 +482,18 @@ def public_driver(row, include_events=False):
     if rate <= 0 and debt_usd > 0 and stored_debt_ves > 0:
         rate = stored_debt_ves / debt_usd
     paid_usd = money(data.get("paid_usd"))
+    paid_ves = money(data.get("paid_ves"))
+    if data.get("status") == "billetera_bipbip" and stored_debt_ves > 0 and paid_ves >= stored_debt_ves - max(1.0, stored_debt_ves * 0.01):
+        paid_usd = max(paid_usd, debt_usd)
     review_usd = money(data.get("review_usd"))
     coverage_usd = paid_usd + review_usd
     pending_usd = max(0.0, debt_usd - paid_usd)
     missing_after_reports_usd = max(0.0, debt_usd - coverage_usd)
-    paid_ves = money(data.get("paid_ves"))
     review_ves = money(data.get("review_ves"))
     pending_ves = pending_usd * rate
     missing_after_reports_ves = missing_after_reports_usd * rate
     coverage_ves = paid_ves + review_ves
+    fully_paid = debt_usd > 0 and paid_usd >= debt_usd - max(0.01, debt_usd * 0.01)
     data["debt_usd"] = money(data.get("debt_usd"))
     data["debt_ves"] = stored_debt_ves if stored_debt_ves > 0 else debt_usd * rate
     data["rate"] = rate
@@ -503,7 +507,9 @@ def public_driver(row, include_events=False):
     data["pending_usd"] = pending_usd
     data["missing_after_reports_ves"] = missing_after_reports_ves
     data["missing_after_reports_usd"] = missing_after_reports_usd
-    data["ready_to_conciliate"] = debt_usd > 0 and coverage_usd >= debt_usd - max(0.01, debt_usd * 0.01)
+    data["is_fully_paid"] = fully_paid
+    data["is_partial_paid"] = (paid_usd > 0 or paid_ves > 0) and not fully_paid
+    data["ready_to_conciliate"] = fully_paid or (debt_usd > 0 and coverage_usd >= debt_usd - max(0.01, debt_usd * 0.01))
     data["successful_call_count"] = int(data.get("successful_call_count") or 0)
     data["missed_call_count"] = int(data.get("missed_call_count") or 0)
     data["followup_count"] = int(data.get("followup_count") or 0)
@@ -584,12 +590,12 @@ def driver_with_latest_payment(con, where="", params=None):
                coalesce((
                    select sum(payments.amount_ves)
                    from payments
-                   where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
+                   where payments.driver_id = drivers.id and payments.status in ({PAID_PAYMENT_STATUSES_SQL})
                ), 0) as paid_ves,
                coalesce((
                    select sum(payments.amount_usd_at_payment)
                    from payments
-                   where payments.driver_id = drivers.id and payments.status in ('pago_parcial', 'conciliado')
+                   where payments.driver_id = drivers.id and payments.status in ({PAID_PAYMENT_STATUSES_SQL})
                ), 0) as paid_usd,
                coalesce((
                    select sum(payments.amount_ves)
@@ -654,7 +660,7 @@ def summary_by_status(user):
             left join (
                 select driver_id, sum(amount_usd_at_payment) as paid_usd, sum(amount_ves) as paid_ves
                 from payments
-                where status in ('pago_parcial', 'conciliado')
+                where status in ({PAID_PAYMENT_STATUSES_SQL})
                 group by driver_id
             ) paid on paid.driver_id = drivers.id
             left join (
@@ -799,7 +805,7 @@ def evaluate_payment(con, driver, body):
     reference = normalize_reference(body.get("reference"))
     amount = money(body.get("amount_ves"))
     paid_usd = con.execute(
-        "select coalesce(sum(amount_usd_at_payment), 0) as paid from payments where driver_id = ? and status in ('pago_parcial', 'conciliado')",
+        f"select coalesce(sum(amount_usd_at_payment), 0) as paid from payments where driver_id = ? and status in ({PAID_PAYMENT_STATUSES_SQL})",
         (driver["id"],),
     ).fetchone()["paid"]
     expected_usd = max(0.0, money(driver["debt_usd"]) - money(paid_usd))

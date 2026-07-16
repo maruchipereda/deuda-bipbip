@@ -363,6 +363,7 @@ function renderSummary() {
 function caseRow(item) {
   const payment = item.payment || {};
   const alerts = parseAlerts(payment.alerts);
+  const signal = signalPill(item);
   return `
     <article class="case-row">
       <div>
@@ -372,7 +373,7 @@ function caseRow(item) {
       <div>
         <strong>${money(item.debt_ves, "VES")}</strong>
         <small>${money(item.debt_usd, "USD")} · pendiente ${money(item.pending_usd, "USD")} / ${money(item.pending_ves, "VES")}</small>
-        ${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : ""}
+        ${signal}
       </div>
       <div>
         <strong>${escapeHtml(payment.reference || "-")}</strong>
@@ -388,6 +389,13 @@ function caseRow(item) {
   `;
 }
 
+function signalPill(item) {
+  if (item.is_fully_paid) return `<span class="ready-pill">Pagado completo</span>`;
+  if (item.is_partial_paid) return `<span class="ready-pill partial">Pago parcial</span>`;
+  if (item.ready_to_conciliate) return `<span class="ready-pill">Listo para conciliar</span>`;
+  return "";
+}
+
 async function openCase(id) {
   const payload = await api(`/api/cases/${id}`);
   const item = payload.case;
@@ -399,6 +407,7 @@ async function openCase(id) {
 function renderCaseDetail(item) {
   const payment = item.payment || {};
   const alerts = parseAlerts(payment.alerts);
+  const signal = signalPill(item);
   const canConciliate = ["master", "admin", "conciliacion"].includes(state.user.role);
   const canUnlock = ["master", "admin", "operaciones"].includes(state.user.role);
   const canDelete = state.user.role === "master";
@@ -421,7 +430,7 @@ function renderCaseDetail(item) {
       <div><span>Abonado conciliado</span><strong>${money(item.paid_usd, "USD")} / ${money(item.paid_ves, "VES")}</strong></div>
       <div><span>Reportado por revisar</span><strong>${money(item.review_usd, "USD")} / ${money(item.review_ves, "VES")}</strong></div>
       <div><span>Falta por cubrir</span><strong>${money(item.pending_usd, "USD")} / ${money(item.pending_ves, "VES")}</strong></div>
-      <div><span>Senal</span><strong>${item.ready_to_conciliate ? `<span class="ready-pill">Listo para conciliar</span>` : "Aun falta pago"}</strong></div>
+      <div><span>Senal</span><strong>${signal || "Aun falta pago"}</strong></div>
     </section>
     <section class="detail-block">
       <h3>Pago reportado</h3>

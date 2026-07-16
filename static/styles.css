@@ -661,6 +661,11 @@ a {
   font-weight: 950;
 }
 
+.ready-pill.partial {
+  background: #fff3bf;
+  color: #8a5a00;
+}
+
 .status.desbloqueado {
   background: var(--ink);
   color: #fff;
