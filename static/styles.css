@@ -786,6 +786,34 @@ a {
   gap: 12px;
 }
 
+.payment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.payment-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--paper);
+}
+
+.payment-history-row strong,
+.payment-history-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.payment-history-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .status-control-head {
   display: flex;
   align-items: center;

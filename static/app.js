@@ -406,6 +406,7 @@ async function openCase(id) {
 
 function renderCaseDetail(item) {
   const payment = item.payment || {};
+  const payments = item.payments || (payment.id ? [payment] : []);
   const alerts = parseAlerts(payment.alerts);
   const signal = signalPill(item);
   const canConciliate = ["master", "admin", "conciliacion"].includes(state.user.role);
@@ -433,8 +434,10 @@ function renderCaseDetail(item) {
       <div><span>Senal</span><strong>${signal || "Aun falta pago"}</strong></div>
     </section>
     <section class="detail-block">
-      <h3>Pago reportado</h3>
+      <h3>${payments.length > 1 ? "Pagos registrados" : "Pago reportado"}</h3>
       ${payment.id ? `
+        ${payments.length > 1 ? `<p class="notes">Falta por cubrir usa la suma de estos pagos, no solo el ultimo.</p>` : ""}
+        ${payments.length > 1 ? `<div class="payment-list">${payments.map(paymentHistoryRow).join("")}</div>` : ""}
         <div class="detail-grid">
           <div><span>Referencia</span><strong>${escapeHtml(payment.reference || "-")}</strong></div>
           <div><span>Monto reportado / validado</span><strong>${money(payment.amount_ves, "VES")}</strong></div>
@@ -523,6 +526,22 @@ function renderCaseDetail(item) {
         `).join("")}
       </div>
     </section>
+  `;
+}
+
+function paymentHistoryRow(payment) {
+  return `
+    <article class="payment-history-row">
+      <div>
+        <strong>${money(payment.amount_ves, "VES")}</strong>
+        <span>${money(payment.amount_usd_at_payment, "USD")} · ${escapeHtml(payment.payment_date || shortDate(payment.created_at) || "-")}</span>
+      </div>
+      <div>
+        <strong>${escapeHtml(payment.reference || "-")}</strong>
+        <span>${escapeHtml(payment.reconciliation_agent || "Sin agente")}</span>
+      </div>
+      <span class="status ${escapeHtml(payment.status || "")}">${escapeHtml(state.statuses?.[payment.status] || payment.status || "-")}</span>
+    </article>
   `;
 }
 

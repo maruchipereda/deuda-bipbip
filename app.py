@@ -524,6 +524,19 @@ def public_driver(row, include_events=False):
     data.pop("payment_json", None)
     if include_events:
         with db() as con:
+            data["payments"] = [
+                public_payment(row)
+                for row in con.execute(
+                    """
+                    select payments.*, users.name as validator_name
+                    from payments
+                    left join users on users.id = payments.validated_by
+                    where payments.driver_id = ?
+                    order by payments.created_at desc
+                    """,
+                    (data["id"],),
+                )
+            ]
             data["events"] = [
                 row_to_dict(row)
                 for row in con.execute(
